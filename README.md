@@ -3,6 +3,18 @@
 Control a **local, real Safari** with the Puppeteer API, backed by
 `safaridriver` (W3C WebDriver) and AppleScript.
 
+> The npm package is **`safari-puppeteer`**; the repository is
+> `yevbar/puppeteer-safari`. The `puppeteer-safari` name on npm is taken by an
+> unrelated placeholder package.
+
+```bash
+npm install safari-puppeteer
+```
+
+ESM-only, macOS-only, Node 18+. TypeScript consumers need `@types/node`
+installed (the public types expose `Buffer` and extend `EventEmitter`) — any
+Node TypeScript project already has it.
+
 ```ts
 import { launch } from 'safari-puppeteer';
 
@@ -216,12 +228,25 @@ capabilities and can require a beta Safari, that is worth a look.
 npm run doctor            # check the environment
 npm test                  # unit tests, no Safari needed
 npm run test:integration  # drives a real Safari window; skips if unavailable
+npm run test:package      # pack, install, and import the built tarball
 npm run build             # emit dist/
 npm run example           # examples/screenshot.ts
 ```
 
 Source uses `.ts` import specifiers so it runs directly under
-`node --experimental-strip-types`; `tsc` rewrites them to `.js` on emit.
+`node --experimental-strip-types` (Node 22.6+) with no build step. `tsc`
+rewrites them to `.js` on emit; `scripts/fix-dts-extensions.mjs` does the same
+for declaration files, which `rewriteRelativeImportExtensions` does not cover as
+of TypeScript 5.9. `npm run test:package` asserts none leak through.
+
+### Publishing
+
+`prepublishOnly` runs the build, the unit tests, and the package verification.
+
+```bash
+npm login
+npm publish     # publishConfig.access is already set to public
+```
 
 ## Requirements
 

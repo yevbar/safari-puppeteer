@@ -650,6 +650,8 @@ export class Page extends EventEmitter {
    * the OS will allow, so very tall pages are still truncated — the returned
    * image is whatever fit.
    */
+  screenshot(options?: ScreenshotOptions & { encoding?: 'binary' }): Promise<Buffer>;
+  screenshot(options: ScreenshotOptions & { encoding: 'base64' }): Promise<string>;
   async screenshot(options: ScreenshotOptions = {}): Promise<Buffer | string> {
     await this.bringToDriver();
 

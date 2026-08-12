@@ -446,6 +446,8 @@ export class ElementHandle extends JSHandle {
   }
 
   /** PNG screenshot of just this element. */
+  screenshot(options?: { encoding?: 'binary' }): Promise<Buffer>;
+  screenshot(options: { encoding: 'base64' }): Promise<string>;
   async screenshot(options: { encoding?: 'binary' | 'base64' } = {}): Promise<Buffer | string> {
     await this.scrollIntoView();
     const base64 = await this.context.client.takeElementScreenshot(this.elementId);

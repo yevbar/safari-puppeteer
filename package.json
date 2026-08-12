@@ -9,26 +9,45 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
+  "author": "Yev Barkalov <yevbar1729@gmail.com>",
+  "license": "MIT",
+  "homepage": "https://github.com/yevbar/puppeteer-safari#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yevbar/puppeteer-safari.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yevbar/puppeteer-safari/issues"
+  },
   "engines": {
     "node": ">=18"
   },
   "os": [
     "darwin"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "npm run clean && tsc -p tsconfig.json && node scripts/fix-dts-extensions.mjs",
     "watch": "tsc -p tsconfig.json --watch",
     "clean": "rm -rf dist",
     "doctor": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/doctor.ts",
     "test": "node --test --experimental-strip-types --disable-warning=ExperimentalWarning test/unit.test.ts",
     "test:integration": "node --test --experimental-strip-types --disable-warning=ExperimentalWarning test/integration.test.ts",
     "test:all": "node --test --experimental-strip-types --disable-warning=ExperimentalWarning test/*.test.ts",
-    "example": "node --experimental-strip-types --disable-warning=ExperimentalWarning examples/screenshot.ts"
+    "test:package": "node scripts/verify-package.mjs",
+    "example": "node --experimental-strip-types --disable-warning=ExperimentalWarning examples/screenshot.ts",
+    "prepublishOnly": "npm run build && npm test && npm run test:package"
   },
   "keywords": [
     "safari",
@@ -37,9 +56,13 @@
     "webdriver",
     "applescript",
     "automation",
-    "macos"
+    "browser",
+    "headful",
+    "macos",
+    "webkit",
+    "scraping",
+    "testing"
   ],
-  "license": "MIT",
   "devDependencies": {
     "@types/node": "^22.10.0",
     "typescript": "^5.7.0"

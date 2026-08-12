@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Development tooling runs the TypeScript sources directly via
+  # `--experimental-strip-types`, which needs Node 22.6+.
+  test:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck and build
+        run: npm run build
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Verify the publishable tarball
+        run: npm run test:package
+
+      # Integration tests need a real Safari window, which requires a GUI
+      # session plus `safaridriver --enable` and "Allow Remote Automation" —
+      # neither is available on a hosted runner. They are run locally; the
+      # suite skips itself rather than failing when Safari is unreachable.
+      - name: Integration tests (skips without Safari automation)
+        run: npm run test:integration
+
+  # The published package is plain JavaScript, so it must work on every Node
+  # version in `engines` — including the ones that cannot strip types.
+  consumers:
+    runs-on: macos-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['18', '20', '22']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Pack, install, and import on Node ${{ matrix.node }}
+        run: npm run test:package
