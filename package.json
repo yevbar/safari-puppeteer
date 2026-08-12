@@ -1,0 +1,47 @@
+{
+  "name": "safari-puppeteer",
+  "version": "0.1.0",
+  "description": "Control local Safari with the Puppeteer API, backed by safaridriver (W3C WebDriver) and AppleScript.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -p tsconfig.json --watch",
+    "clean": "rm -rf dist",
+    "doctor": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/doctor.ts",
+    "test": "node --test --experimental-strip-types --disable-warning=ExperimentalWarning test/unit.test.ts",
+    "test:integration": "node --test --experimental-strip-types --disable-warning=ExperimentalWarning test/integration.test.ts",
+    "test:all": "node --test --experimental-strip-types --disable-warning=ExperimentalWarning test/*.test.ts",
+    "example": "node --experimental-strip-types --disable-warning=ExperimentalWarning examples/screenshot.ts"
+  },
+  "keywords": [
+    "safari",
+    "puppeteer",
+    "safaridriver",
+    "webdriver",
+    "applescript",
+    "automation",
+    "macos"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}

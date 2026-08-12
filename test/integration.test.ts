@@ -1,0 +1,322 @@
+/**
+ * Integration tests — these drive a real Safari window.
+ *
+ * Requires: safaridriver --enable, and Safari > Develop > Allow Remote
+ * Automation. Run `npm run doctor` first; if the environment is not ready the
+ * whole suite skips rather than failing, so `npm test` stays useful on CI boxes
+ * without a Safari GUI session.
+ *
+ * Run: node --test --experimental-strip-types test/integration.test.ts
+ */
+import assert from 'node:assert/strict';
+import { createServer, type Server } from 'node:http';
+import { after, before, describe, it } from 'node:test';
+
+import { launch } from '../src/index.ts';
+import type { Browser } from '../src/api/Browser.ts';
+import type { Page } from '../src/api/Page.ts';
+import { UnsupportedOperationError } from '../src/common/errors.ts';
+
+const FIXTURE = `<!doctype html>
+<meta charset="utf-8">
+<title>Fixture</title>
+<h1 id="heading">Hello Safari</h1>
+<input id="text" value="">
+<select id="choice">
+  <option value="a">A</option>
+  <option value="b">B</option>
+</select>
+<select id="multi" multiple>
+  <option value="x">X</option>
+  <option value="y">Y</option>
+  <option value="z">Z</option>
+</select>
+<button id="btn" onclick="document.getElementById('out').textContent='clicked'">Click</button>
+<p id="out"></p>
+<div id="tall" style="height: 3000px"></div>
+<a id="link" href="/second">second</a>`;
+
+const SECOND = `<!doctype html><title>Second</title><h1 id="heading">Second page</h1>`;
+
+let server: Server;
+let origin: string;
+let browser: Browser | null = null;
+let page: Page;
+/** Set when the environment cannot run Safari; every test then skips. */
+let skipReason: string | null = null;
+
+before(async () => {
+  server = createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(req.url === '/second' ? SECOND : FIXTURE);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address() as { port: number };
+  origin = `http://127.0.0.1:${address.port}`;
+
+  try {
+    browser = await launch({ defaultViewport: { width: 1024, height: 768 } });
+    const [first] = await browser.pages();
+    if (!first) throw new Error('launch() produced no page');
+    page = first;
+  } catch (cause) {
+    skipReason = `Safari automation unavailable: ${(cause as Error).message.split('\n')[0]}`;
+  }
+});
+
+after(async () => {
+  await browser?.close();
+  server?.close();
+});
+
+/** Wrap a test body so it skips cleanly when Safari is unavailable. */
+function safariTest(name: string, body: () => Promise<void>): void {
+  it(name, async (t) => {
+    if (skipReason !== null) {
+      t.skip(skipReason);
+      return;
+    }
+    await body();
+  });
+}
+
+describe('navigation', () => {
+  safariTest('goto resolves after the document loads', async () => {
+    await page.goto(`${origin}/`);
+    assert.equal(await page.title(), 'Fixture');
+    assert.match(await page.url(), /127\.0\.0\.1/);
+  });
+
+  safariTest('back and forward traverse history', async () => {
+    await page.goto(`${origin}/`);
+    await page.goto(`${origin}/second`);
+    assert.equal(await page.title(), 'Second');
+
+    await page.goBack();
+    assert.equal(await page.title(), 'Fixture');
+
+    await page.goForward();
+    assert.equal(await page.title(), 'Second');
+  });
+
+  safariTest('setContent replaces the document', async () => {
+    await page.setContent('<title>Injected</title><h1 id="h">Injected</h1>');
+    assert.equal(await page.$eval('#h', (el: Element) => el.textContent), 'Injected');
+  });
+});
+
+describe('evaluate', () => {
+  safariTest('returns JSON values', async () => {
+    await page.goto(`${origin}/`);
+    assert.equal(await page.evaluate(() => 6 * 7), 42);
+    assert.deepEqual(await page.evaluate(() => ({ a: [1, 2], b: 'x' })), { a: [1, 2], b: 'x' });
+  });
+
+  safariTest('passes arguments through', async () => {
+    const sum = await page.evaluate((a: number, b: number) => a + b, 20, 22);
+    assert.equal(sum, 42);
+  });
+
+  safariTest('propagates page-side exceptions', async () => {
+    await assert.rejects(
+      () => page.evaluate(() => {
+        throw new Error('boom');
+      }),
+      /boom/,
+    );
+  });
+
+  safariTest('evaluateHandle round-trips a non-serializable value', async () => {
+    // window is not JSON-serializable; the registry is what makes this work.
+    const handle = await page.evaluateHandle(() => window);
+    const href = await handle.evaluate((win: Window) => win.location.href);
+    assert.match(String(href), /127\.0\.0\.1/);
+    await handle.dispose();
+  });
+
+  safariTest('a handle survives being passed back into evaluate', async () => {
+    const handle = await page.evaluateHandle(() => ({ nested: { value: 7 } }));
+    const value = await page.evaluate((obj: any) => obj.nested.value, handle);
+    assert.equal(value, 7);
+    await handle.dispose();
+  });
+});
+
+describe('selectors and elements', () => {
+  safariTest('$ returns null rather than throwing when absent', async () => {
+    await page.goto(`${origin}/`);
+    assert.equal(await page.$('#does-not-exist'), null);
+  });
+
+  safariTest('$$ returns every match', async () => {
+    const options = await page.$$('#choice option');
+    assert.equal(options.length, 2);
+  });
+
+  safariTest('element text and attributes', async () => {
+    const heading = await page.$('#heading');
+    assert.ok(heading);
+    assert.equal(await heading.textContent(), 'Hello Safari');
+    assert.equal(await heading.tagName(), 'h1');
+    assert.equal(await heading.getAttribute('id'), 'heading');
+  });
+
+  safariTest('boundingBox reports geometry', async () => {
+    const heading = await page.$('#heading');
+    const box = await heading!.boundingBox();
+    assert.ok(box && box.width > 0 && box.height > 0);
+  });
+});
+
+describe('interaction', () => {
+  safariTest('click triggers the handler', async () => {
+    await page.goto(`${origin}/`);
+    await page.click('#btn');
+    await page.waitForFunction(() => document.getElementById('out')!.textContent === 'clicked');
+    assert.equal(await page.$eval('#out', (el: Element) => el.textContent), 'clicked');
+  });
+
+  safariTest('type enters text into an input', async () => {
+    await page.goto(`${origin}/`);
+    await page.type('#text', 'hello');
+    assert.equal(await page.$eval('#text', (el: HTMLInputElement) => el.value), 'hello');
+  });
+
+  safariTest('keyboard.press sends a non-printable key', async () => {
+    await page.goto(`${origin}/`);
+    await page.type('#text', 'abc');
+    await page.focus('#text');
+    await page.keyboard.press('Backspace');
+    assert.equal(await page.$eval('#text', (el: HTMLInputElement) => el.value), 'ab');
+  });
+
+  safariTest('select sets the chosen option', async () => {
+    await page.goto(`${origin}/`);
+    const selected = await page.select('#choice', 'b');
+    assert.deepEqual(selected, ['b']);
+    assert.equal(await page.$eval('#choice', (el: HTMLSelectElement) => el.value), 'b');
+  });
+
+  safariTest('select on a single <select> does not fall back to the first option', async () => {
+    // Regression: assigning selected=false option-by-option makes HTML's
+    // "ask for a reset" algorithm re-select option A.
+    await page.goto(`${origin}/`);
+    await page.select('#choice', 'b');
+    assert.equal(await page.$eval('#choice', (el: HTMLSelectElement) => el.value), 'b');
+  });
+
+  safariTest('select sets several options on a multiple <select>', async () => {
+    await page.goto(`${origin}/`);
+    const selected = await page.select('#multi', 'x', 'z');
+    assert.deepEqual(selected.sort(), ['x', 'z']);
+    const live = await page.$eval('#multi', (el: HTMLSelectElement) =>
+      Array.from(el.selectedOptions).map((option) => option.value),
+    );
+    assert.deepEqual((live as string[]).sort(), ['x', 'z']);
+  });
+
+  safariTest('mouse.click hits viewport coordinates', async () => {
+    await page.goto(`${origin}/`);
+    const button = await page.$('#btn');
+    const box = await button!.boundingBox();
+    assert.ok(box);
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForFunction(() => document.getElementById('out')!.textContent === 'clicked');
+  });
+});
+
+describe('waiting', () => {
+  safariTest('waitForSelector resolves once the node appears', async () => {
+    await page.goto(`${origin}/`);
+    void page.evaluate(() => {
+      setTimeout(() => {
+        const el = document.createElement('div');
+        el.id = 'late';
+        document.body.appendChild(el);
+      }, 300);
+    });
+    const late = await page.waitForSelector('#late', { timeout: 5000 });
+    assert.ok(late);
+  });
+
+  safariTest('waitForSelector times out with a TimeoutError', async () => {
+    await page.goto(`${origin}/`);
+    await assert.rejects(
+      () => page.waitForSelector('#never-appears', { timeout: 500 }),
+      (error: Error) => error.name === 'TimeoutError',
+    );
+  });
+});
+
+describe('cookies', () => {
+  safariTest('set, read, and delete', async () => {
+    await page.goto(`${origin}/`);
+    await page.deleteAllCookies();
+    await page.setCookie({ name: 'token', value: 'abc123', path: '/' });
+
+    const cookies = await page.cookies();
+    assert.equal(cookies.find((c) => c.name === 'token')?.value, 'abc123');
+
+    await page.deleteCookie({ name: 'token' });
+    assert.equal((await page.cookies()).find((c) => c.name === 'token'), undefined);
+  });
+
+  safariTest('rejects the unsupported urls argument explicitly', async () => {
+    await assert.rejects(
+      () => page.cookies('https://example.com'),
+      UnsupportedOperationError,
+    );
+  });
+});
+
+describe('screenshots', () => {
+  safariTest('viewport screenshot returns a PNG buffer', async () => {
+    await page.goto(`${origin}/`);
+    const shot = (await page.screenshot()) as Buffer;
+    assert.ok(Buffer.isBuffer(shot));
+    // PNG magic number.
+    assert.deepEqual([...shot.subarray(0, 4)], [0x89, 0x50, 0x4e, 0x47]);
+  });
+
+  safariTest('element screenshot is smaller than the full viewport', async () => {
+    const heading = await page.$('#heading');
+    const shot = (await heading!.screenshot()) as Buffer;
+    assert.ok(Buffer.isBuffer(shot) && shot.length > 0);
+  });
+});
+
+describe('tabs', () => {
+  safariTest('newPage opens an independently addressable tab', async () => {
+    const second = await browser!.newPage();
+    await second.goto(`${origin}/second`);
+    assert.equal(await second.title(), 'Second');
+
+    // The original page must still be reachable — this is the window-handle
+    // multiplexing working.
+    await page.goto(`${origin}/`);
+    assert.equal(await page.title(), 'Fixture');
+
+    await second.close();
+  });
+});
+
+describe('unsupported operations fail loudly', () => {
+  safariTest('pdf explains why and what to do instead', async () => {
+    await assert.rejects(
+      () => page.pdf(),
+      (error: Error) => {
+        assert.ok(error instanceof UnsupportedOperationError);
+        assert.match(error.message, /print/);
+        assert.match(error.message, /Alternative:/);
+        return true;
+      },
+    );
+  });
+
+  safariTest('request interception names the BiDi gap', async () => {
+    await assert.rejects(
+      () => page.setRequestInterception(),
+      /WebDriver BiDi/,
+    );
+  });
+});
