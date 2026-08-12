@@ -11,9 +11,8 @@ Control a **local, real Safari** with the Puppeteer API, backed by
 npm install safari-puppeteer
 ```
 
-ESM-only, macOS-only, Node 18+. TypeScript consumers need `@types/node`
-installed (the public types expose `Buffer` and extend `EventEmitter`) — any
-Node TypeScript project already has it.
+ESM-only, macOS-only, Node 18+. The public types expose `Buffer` and extend
+`EventEmitter`, so `@types/node` is a real dependency and is installed for you.
 
 ```ts
 import { launch } from 'safari-puppeteer';
@@ -203,6 +202,33 @@ Worth reading before you debug something surprising:
   window handles.
 - **`uploadFile` is best-effort.** Safari's support for the spec's file-input
   behaviour is historically inconsistent — verify on your version.
+- **`isVisible()` is computed in-page.** safaridriver does not implement
+  WebDriver's `/element/{id}/displayed` endpoint — it answers `unknown
+  command` — so visibility is evaluated with `checkVisibility()` plus a
+  zero-area check instead.
+
+## The screen must be unlocked
+
+This one costs people an afternoon, so it is worth stating plainly.
+
+**While the macOS screen is locked, pointer events do nothing.** No window can
+become the key window, so the OS never delivers synthesized clicks to Safari.
+`page.click()`, `mouse.click()`, `hover()` and `tap()` all return successfully
+and have no effect — no error is raised. Whatever you were waiting on then times
+out with a message about the wait, not about the cause.
+
+Measured on Safari 18.6, while locked:
+
+| Still works | Silently does nothing |
+|---|---|
+| navigation, `evaluate`, screenshots, cookies | `page.click()`, `mouse.click()` |
+| `page.type()`, `keyboard.press()` | `hover()`, `tap()` |
+| `element.click()` dispatched inside `evaluate` | any pointer Actions sequence |
+
+`npm run doctor` reports the lock state, and the integration suite skips its
+pointer tests with an explanation rather than timing out. A remote or headless
+CI runner has the same problem for the same reason — that is one of several
+reasons Safari automation needs a real, unlocked GUI session.
 
 ## Why not WebDriver BiDi?
 

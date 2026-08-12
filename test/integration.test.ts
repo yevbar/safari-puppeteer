@@ -16,6 +16,7 @@ import { launch } from '../src/index.ts';
 import type { Browser } from '../src/api/Browser.ts';
 import type { Page } from '../src/api/Page.ts';
 import { UnsupportedOperationError } from '../src/common/errors.ts';
+import { isScreenLocked } from '../src/common/macos.ts';
 
 const FIXTURE = `<!doctype html>
 <meta charset="utf-8">
@@ -44,6 +45,11 @@ let browser: Browser | null = null;
 let page: Page;
 /** Set when the environment cannot run Safari; every test then skips. */
 let skipReason: string | null = null;
+/**
+ * Set when the screen is locked. Only tests that need native input skip — the
+ * rest still run, since navigation and evaluation are unaffected.
+ */
+let inputSkipReason: string | null = null;
 
 before(async () => {
   server = createServer((req, res) => {
@@ -53,6 +59,14 @@ before(async () => {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address() as { port: number };
   origin = `http://127.0.0.1:${address.port}`;
+
+  if (await isScreenLocked()) {
+    // Native clicks and key presses report success but never dispatch while the
+    // screen is locked, so those tests would fail as 30s timeouts with no clue
+    // as to why. Say so instead.
+    inputSkipReason =
+      'macOS screen is locked — Safari cannot receive synthesized pointer events. Unlock and re-run.';
+  }
 
   try {
     browser = await launch({ defaultViewport: { width: 1024, height: 768 } });
@@ -74,6 +88,21 @@ function safariTest(name: string, body: () => Promise<void>): void {
   it(name, async (t) => {
     if (skipReason !== null) {
       t.skip(skipReason);
+      return;
+    }
+    await body();
+  });
+}
+
+/** As {@link safariTest}, but also skips when the screen is locked. */
+function inputTest(name: string, body: () => Promise<void>): void {
+  it(name, async (t) => {
+    if (skipReason !== null) {
+      t.skip(skipReason);
+      return;
+    }
+    if (inputSkipReason !== null) {
+      t.skip(inputSkipReason);
       return;
     }
     await body();
@@ -161,6 +190,28 @@ describe('selectors and elements', () => {
     assert.equal(await heading.getAttribute('id'), 'heading');
   });
 
+  safariTest('isVisible works despite safaridriver lacking /displayed', async () => {
+    // safaridriver answers `unknown command` for the WebDriver displayedness
+    // endpoint, so this is computed in-page. Regression guard: if it ever falls
+    // back to the driver, waitForSelector({ visible: true }) hangs.
+    await page.setContent(`
+      <div id="shown">visible</div>
+      <div id="none" style="display:none">hidden</div>
+      <div id="hiddenvis" style="visibility:hidden">hidden</div>
+      <div id="zero" style="width:0;height:0;overflow:hidden">zero</div>
+    `);
+    assert.equal(await (await page.$('#shown'))!.isVisible(), true);
+    assert.equal(await (await page.$('#none'))!.isVisible(), false);
+    assert.equal(await (await page.$('#hiddenvis'))!.isVisible(), false);
+    assert.equal(await (await page.$('#zero'))!.isVisible(), false);
+  });
+
+  safariTest('waitForSelector({ visible }) resolves for a rendered node', async () => {
+    await page.goto(`${origin}/`);
+    const found = await page.waitForSelector('#heading', { visible: true, timeout: 5000 });
+    assert.ok(found);
+  });
+
   safariTest('boundingBox reports geometry', async () => {
     const heading = await page.$('#heading');
     const box = await heading!.boundingBox();
@@ -169,7 +220,9 @@ describe('selectors and elements', () => {
 });
 
 describe('interaction', () => {
-  safariTest('click triggers the handler', async () => {
+  // Pointer events require a key window; keyboard events do not, which is why
+  // only the click tests are gated on the screen being unlocked.
+  inputTest('click triggers the handler', async () => {
     await page.goto(`${origin}/`);
     await page.click('#btn');
     await page.waitForFunction(() => document.getElementById('out')!.textContent === 'clicked');
@@ -215,7 +268,7 @@ describe('interaction', () => {
     assert.deepEqual((live as string[]).sort(), ['x', 'z']);
   });
 
-  safariTest('mouse.click hits viewport coordinates', async () => {
+  inputTest('mouse.click hits viewport coordinates', async () => {
     await page.goto(`${origin}/`);
     const button = await page.$('#btn');
     const box = await button!.boundingBox();

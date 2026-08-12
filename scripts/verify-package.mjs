@@ -143,6 +143,60 @@ try {
     assert.equal(byName.trim(), 'function');
   });
 
+  check('declares @types/node as a runtime dependency', () => {
+    // The public types reference `Buffer` and extend `EventEmitter`, so the
+    // declarations do not stand alone. Shipping it as a real dependency is what
+    // lets a consumer compile without installing it themselves.
+    const manifest = JSON.parse(
+      readFileSync(join(consumer, 'node_modules', 'safari-puppeteer', 'package.json'), 'utf8'),
+    );
+    assert.ok(
+      manifest.dependencies?.['@types/node'],
+      '@types/node must be a dependency, not a devDependency',
+    );
+  });
+
+  check('a TypeScript consumer compiles without installing @types/node', () => {
+    // The end-to-end proof of the check above, and a guard against declaration
+    // emit regressing (bad `.ts` specifiers surface here too).
+    writeFileSync(
+      join(consumer, 'tsconfig.json'),
+      JSON.stringify({
+        compilerOptions: {
+          target: 'ES2022',
+          module: 'NodeNext',
+          moduleResolution: 'NodeNext',
+          strict: true,
+          noEmit: true,
+          skipLibCheck: false,
+        },
+        files: ['probe.ts'],
+      }),
+    );
+    writeFileSync(
+      join(consumer, 'probe.ts'),
+      [
+        "import { launch, type Viewport } from 'safari-puppeteer';",
+        'const viewport: Viewport = { width: 800, height: 600 };',
+        'export async function probe(): Promise<number> {',
+        '  const browser = await launch({ defaultViewport: viewport });',
+        '  const [page] = await browser.pages();',
+        '  if (!page) throw new Error("no page");',
+        '  const shot: Buffer = await page.screenshot();',
+        '  const b64: string = await page.screenshot({ encoding: "base64" });',
+        '  await browser.close();',
+        '  return shot.length + b64.length;',
+        '}',
+      ].join('\n'),
+    );
+
+    // Use this repo's TypeScript; the consumer only has the package itself.
+    execFileSync(process.execPath, [join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', '.'], {
+      cwd: consumer,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  });
+
   check('unsupported APIs still reject with guidance', async () => {
     // A cheap end-to-end proof that error classes survived the build.
     assert.equal(typeof mod.UnsupportedOperationError, 'function');

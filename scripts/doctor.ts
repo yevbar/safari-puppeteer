@@ -115,6 +115,21 @@ async function checkRemoteAutomation(): Promise<void> {
   }
 }
 
+/**
+ * A locked screen breaks native input specifically, and does so silently, so it
+ * is worth reporting even though everything else will look healthy.
+ */
+async function checkScreenLock(): Promise<void> {
+  const { isScreenLocked, SCREEN_LOCKED_HINT } = await import('../src/common/macos.ts');
+  const locked = await isScreenLocked();
+  record(
+    'Screen lock',
+    locked ? 'warn' : 'pass',
+    locked ? 'screen is LOCKED — pointer events (clicks, hover, tap) will do nothing' : 'screen is unlocked',
+    locked ? SCREEN_LOCKED_HINT : undefined,
+  );
+}
+
 /** AppleScript is optional; only some features need it. */
 async function checkAppleScript(): Promise<void> {
   try {
@@ -173,6 +188,7 @@ async function main(): Promise<void> {
   await checkPlatform();
   await checkSafari();
   await checkSafariDriver();
+  await checkScreenLock();
   await checkAppleScript();
   await checkAppleEventsJavaScript();
 

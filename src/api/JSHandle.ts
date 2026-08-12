@@ -217,8 +217,35 @@ export class ElementHandle extends JSHandle {
     return rect;
   }
 
+  /**
+   * Whether the element is rendered and visible.
+   *
+   * Computed in-page rather than via WebDriver's `/element/{id}/displayed`,
+   * because safaridriver does not implement that endpoint — it answers
+   * `unknown command`. Silently treating that error as "not visible" would make
+   * `waitForSelector({ visible: true })` hang until it times out.
+   */
   isVisible(): Promise<boolean> {
-    return this.context.client.isElementDisplayed(this.elementId);
+    return this.evaluate<boolean>((element: Element) => {
+      // Safari 17.4+ has the spec algorithm built in; prefer it when present.
+      const withCheck = element as Element & {
+        checkVisibility?: (options?: Record<string, boolean>) => boolean;
+      };
+      if (typeof withCheck.checkVisibility === 'function') {
+        if (!withCheck.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) {
+          return false;
+        }
+      } else {
+        const style = window.getComputedStyle(element);
+        if (style.display === 'none' || style.visibility !== 'visible') return false;
+        if (Number.parseFloat(style.opacity) === 0) return false;
+      }
+
+      // `checkVisibility` reports true for zero-area elements, which is not
+      // what "visible" means for the purpose of clicking one.
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    });
   }
 
   isHidden(): Promise<boolean> {

@@ -353,6 +353,11 @@ export class WebDriverClient {
     return this.#s('GET', `/element/${elementId}/selected`);
   }
 
+  /**
+   * Not implemented by safaridriver — it answers `unknown command`. Kept for
+   * protocol completeness against other drivers; {@link ElementHandle.isVisible}
+   * computes visibility in-page instead.
+   */
   isElementDisplayed(elementId: string): Promise<boolean> {
     return this.#s('GET', `/element/${elementId}/displayed`);
   }
