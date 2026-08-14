@@ -41,8 +41,28 @@ export type BackendFeature =
   | 'mediaType'
   /** OS-level window geometry (`windowRect`, `maximize`). */
   | 'windowRect'
-  /** Input dispatched by the browser as trusted events. */
-  | 'trustedInput';
+  /** The low-level W3C Actions API, i.e. `page.keyboard` / `page.mouse`. */
+  | 'lowLevelInput';
+
+/**
+ * Browser-level operations that differ between backends.
+ *
+ * `Browser` owns tab bookkeeping and lifecycle; this is the small set of calls
+ * underneath that are protocol-specific.
+ */
+export interface BrowserSession {
+  readonly name: BackendName;
+  /** Handles of every open tab. */
+  listHandles(): Promise<string[]>;
+  /** Handle of the tab commands currently apply to. */
+  currentHandle(): Promise<string>;
+  /** Open a tab and return its handle. */
+  newTab(): Promise<string>;
+  /** Build the page backend for a handle. */
+  createBackend(handle: string): PageBackend;
+  /** Tear the session down. */
+  dispose(): Promise<void>;
+}
 
 export interface ConsoleRecord {
   type: string;

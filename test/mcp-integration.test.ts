@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import { after, before, describe, it } from 'node:test';
 
-import { launch } from '../src/index.ts';
+import { launch, type LaunchOptions } from '../src/index.ts';
 import type { Browser } from '../src/api/Browser.ts';
 import type { Page } from '../src/api/Page.ts';
 import { isScreenLocked } from '../src/common/macos.ts';
@@ -244,7 +244,10 @@ describe('MCP channel against real Safari', () => {
 
   mcpTest('still refuses request interception and page-scoped inspection', async () => {
     await assert.rejects(() => page.setRequestInterception(), /not supported/);
-    await assert.rejects(() => page.networkRequests(), /cannot see tabs owned by a WebDriver session/);
+    // On the WebDriver backend the reason is the missing network layer, and
+    // the remedy is the MCP backend rather than the side channel.
+    await assert.rejects(() => page.networkRequests(), /no network layer at all/);
+    await assert.rejects(() => page.networkRequests(), /backend: 'mcp'/);
     await assert.rejects(() => page.emulateMediaFeatures(), /not supported/);
   });
 });
@@ -267,5 +270,141 @@ describe('MCP availability reporting', () => {
     // page_interactions dispatches native events, so it has the same
     // locked-screen failure mode as WebDriver clicks.
     assert.equal(typeof (await isScreenLocked()), 'boolean');
+  });
+});
+
+
+/**
+ * The MCP *backend* — the whole stack driven through safaridriver --mcp, with
+ * no WebDriver session at all. That is what makes network inspection apply to
+ * the page you actually navigated.
+ */
+describe('MCP backend against real Safari', () => {
+  let mcpBrowser: Browser | null = null;
+  let mcpPage: Page;
+  let backendSkip: string | null = null;
+
+  before(async () => {
+    if (skipReason !== null) {
+      backendSkip = skipReason;
+      return;
+    }
+    try {
+      const options: LaunchOptions = {
+        backend: 'mcp',
+        safaridriverPath: TECH_PREVIEW_SAFARIDRIVER,
+      };
+      mcpBrowser = await launch(options);
+      const [first] = await mcpBrowser.pages();
+      if (!first) throw new Error('No page was opened.');
+      mcpPage = first;
+    } catch (cause) {
+      backendSkip = `Could not launch the MCP backend: ${(cause as Error).message}`;
+      await mcpBrowser?.close().catch(() => {});
+      mcpBrowser = null;
+    }
+  });
+
+  after(async () => {
+    await mcpBrowser?.close().catch(() => {});
+  });
+
+  function backendTest(name: string, fn: () => Promise<void>): void {
+    it(name, async (t) => {
+      if (backendSkip !== null) {
+        t.skip(backendSkip);
+        return;
+      }
+      await fn();
+    });
+  }
+
+  backendTest('reports itself as the mcp backend', async () => {
+    assert.equal(mcpBrowser!.backendName, 'mcp');
+    assert.equal(mcpPage.backend.name, 'mcp');
+  });
+
+  backendTest('navigates and reads the document', async () => {
+    await mcpPage.goto('https://example.com/');
+    assert.equal(await mcpPage.url(), 'https://example.com/');
+    assert.equal(await mcpPage.title(), 'Example Domain');
+    assert.match(await mcpPage.content(), /<h1>Example Domain<\/h1>/);
+  });
+
+  backendTest('evaluates with arguments and structured results', async () => {
+    assert.equal(await mcpPage.evaluate(() => 6 * 7), 42);
+    assert.equal(await mcpPage.evaluate((a: number, b: number) => a + b, 20, 22), 42);
+    assert.deepEqual(await mcpPage.evaluate(() => ({ a: 1, b: [2, 3] })), { a: 1, b: [2, 3] });
+  });
+
+  backendTest('runs $eval and $$eval without element handles', async () => {
+    await mcpPage.goto('https://example.com/');
+    assert.equal(await mcpPage.$eval('h1', (el: Element) => el.textContent), 'Example Domain');
+    assert.equal(await mcpPage.$$eval('p', (els: Element[]) => els.length), 2);
+  });
+
+  backendTest('waits for selectors and functions', async () => {
+    await mcpPage.goto('https://example.com/');
+    // No handle is returned, but the wait itself has to work.
+    assert.equal(await mcpPage.waitForSelector('h1'), null);
+    assert.equal(await mcpPage.waitForFunction(() => document.readyState === 'complete'), null);
+  });
+
+  /**
+   * The reason this backend exists: the requests belong to the page the caller
+   * navigated, not to a separate browsing context.
+   */
+  backendTest('observes network requests for the page it is driving', async () => {
+    await mcpPage.goto('https://example.com/');
+    const result = (await mcpPage.networkRequests()) as {
+      count: number;
+      requests: Array<{ url: string; status: number; method: string; mime_type: string }>;
+    };
+    assert.ok(result.count > 0, `expected observed requests, got ${JSON.stringify(result)}`);
+
+    const document = result.requests.find((request) => request.url.startsWith('https://example.com'));
+    assert.ok(document, `no example.com request in ${JSON.stringify(result.requests)}`);
+    assert.equal(document.status, 200);
+    assert.equal(document.method, 'GET');
+    assert.equal(document.mime_type, 'text/html');
+  });
+
+  backendTest('takes a native full-page screenshot', async () => {
+    await mcpPage.goto('https://example.com/');
+    const shot = await mcpPage.screenshot({ fullPage: true });
+    assert.ok(Buffer.isBuffer(shot));
+    // The tool writes a file and answers with prose; anything short means we
+    // returned the sentence instead of the image.
+    assert.ok(shot.length > 1000, `expected a real PNG, got ${shot.length} bytes`);
+    assert.equal(shot.subarray(1, 4).toString('ascii'), 'PNG');
+  });
+
+  backendTest('emulates a media type, which WebDriver cannot', async () => {
+    await mcpPage.goto('https://example.com/');
+    await mcpPage.emulateMediaType('print');
+    assert.equal(await mcpPage.evaluate(() => matchMedia('print').matches), true);
+    await mcpPage.emulateMediaType('');
+    assert.equal(await mcpPage.evaluate(() => matchMedia('screen').matches), true);
+  });
+
+  backendTest('drives selector-level input', async () => {
+    await mcpPage.goto('https://example.com/');
+    await mcpPage.hover('h1');
+    // Focus falls back to an in-page call, since there is no focus interaction.
+    await mcpPage.evaluate(() => {
+      const input = document.createElement('input');
+      input.id = 'probe';
+      document.body.appendChild(input);
+    });
+    await mcpPage.focus('#probe');
+    assert.equal(await mcpPage.evaluate(() => document.activeElement?.id), 'probe');
+  });
+
+  backendTest('refuses what it cannot do, naming the backend', async () => {
+    await assert.rejects(() => mcpPage.$('h1'), /elementHandles/);
+    await assert.rejects(() => mcpPage.cookies(), /cookies/);
+    await assert.rejects(() => mcpPage.$x('//h1'), /xpath/);
+    assert.throws(() => mcpPage.keyboard, /Actions API/);
+    assert.throws(() => mcpBrowser!.client, /does not speak WebDriver/);
   });
 });

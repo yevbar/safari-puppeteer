@@ -1,10 +1,9 @@
 /**
- * Read-only network inspection via the MCP channel.
+ * Read-only network inspection, using the MCP backend.
  *
- * Note what this example does *not* do: it never inspects traffic for a page
- * driven with page.goto(). The MCP server is a separate browsing context that
- * only sees tabs it created itself, so the tab has to come from mcp.createTab()
- * and the navigation has to happen after that. See the README.
+ * The MCP server can only observe tabs it created itself, so this drives the
+ * whole page through it — `backend: 'mcp'` rather than the `mcp: true` side
+ * channel. That is what makes the requests belong to the page we navigated.
  *
  * Requires Safari Technology Preview 247+ with remote automation enabled in
  * Technology Preview itself (its settings are separate from Safari's):
@@ -25,35 +24,30 @@ if (!(await isMcpSupported(TECH_PREVIEW_SAFARIDRIVER))) {
 }
 
 const browser = await launch({
-  mcp: true,
+  backend: 'mcp',
   safaridriverPath: TECH_PREVIEW_SAFARIDRIVER,
   defaultViewport: { width: 1280, height: 800 },
 });
 
 try {
-  const mcp = await browser.mcp();
-
-  // The MCP server must own the tab, and capture only covers navigations made
-  // after it exists — so create, switch, *then* navigate.
-  const tab = (await mcp.createTab()) as { handle: string };
-  await mcp.switchTab(tab.handle);
-  await mcp.navigate('https://example.com/', tab.handle);
+  const [page] = await browser.pages();
+  if (!page) throw new Error('No page was opened.');
 
   // Requests to 127.0.0.1 are never recorded, so a local fixture server would
   // come back empty here.
-  const observed = await mcp.listNetworkRequests({ tabHandle: tab.handle });
-  console.log('Observed requests:');
+  await page.goto('https://example.com');
+
+  const observed = await page.networkRequests();
+  console.log('Observed requests for the page we navigated:');
   console.log(JSON.stringify(observed, null, 2));
 
-  await mcp.closeTab(tab.handle);
+  // Available on this backend and nowhere else.
+  await page.emulateMediaType('print');
+  console.log('print media matches:', await page.evaluate(() => matchMedia('print').matches));
 
-  // Meanwhile the WebDriver session is a completely separate browser context.
-  const [page] = await browser.pages();
-  if (page) {
-    await page.goto('https://example.com');
-    console.log('WebDriver page title:', await page.title());
-    console.log('Tabs visible to MCP:', JSON.stringify(await mcp.listTabs()));
-  }
+  // The trade-off, stated by the backend itself.
+  console.log('element handles:', page.supports('elementHandles'));
+  console.log('cookies        :', page.supports('cookies'));
 } finally {
   await browser.close();
 }

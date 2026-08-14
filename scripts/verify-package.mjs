@@ -215,6 +215,39 @@ try {
     // A driver that cannot serve MCP must be reported, not assumed.
     assert.equal(await mod.isMcpSupported('/nonexistent/safaridriver'), false);
   });
+
+  check('both backends ship and declare their capabilities', async () => {
+    for (const name of ['WebDriverBackend', 'McpBackend', 'WebDriverSession', 'McpSession']) {
+      assert.equal(typeof mod[name], 'function', `${name} must be exported`);
+    }
+
+    // Constructed with nulls: supports() must be answerable without a live
+    // connection, since launch() and Page consult it before doing anything.
+    const webdriver = new mod.WebDriverBackend(null, 'handle');
+    const mcp = new mod.McpBackend(null, 'handle');
+
+    assert.equal(webdriver.name, 'webdriver');
+    assert.equal(mcp.name, 'mcp');
+
+    assert.ok(webdriver.supports('elementHandles'));
+    assert.ok(webdriver.supports('cookies'));
+    assert.equal(webdriver.supports('networkInspection'), false);
+
+    assert.ok(mcp.supports('networkInspection'), 'the MCP backend exists for this');
+    assert.equal(mcp.supports('elementHandles'), false);
+    assert.equal(mcp.supports('cookies'), false);
+  });
+
+  check("launch({ backend: 'mcp' }) fails with instructions when unavailable", async () => {
+    await assert.rejects(
+      () => mod.launch({ backend: 'mcp', safaridriverPath: '/nonexistent/safaridriver' }),
+      (error) => {
+        assert.match(error.message, /does not support --mcp/);
+        assert.match(error.message, /safari-technology-preview/);
+        return true;
+      },
+    );
+  });
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }

@@ -162,7 +162,8 @@ async function checkMcp(): Promise<void> {
     `--mcp supported by ${supported.join(', ')}`,
     usesPreview
       ? 'Only Technology Preview supports it, so pass both options together:\n' +
-        `  launch({ mcp: true, safaridriverPath: '${TECH_PREVIEW_SAFARIDRIVER}' })\n` +
+        `  launch({ backend: 'mcp', safaridriverPath: '${TECH_PREVIEW_SAFARIDRIVER}' })\n` +
+        'That backend is the only way to inspect network traffic for pages you drive.\n' +
         'Remote automation must be enabled in Technology Preview separately from Safari.'
       : undefined,
   );

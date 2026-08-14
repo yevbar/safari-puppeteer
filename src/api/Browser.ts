@@ -3,9 +3,9 @@ import { EventEmitter } from 'node:events';
 import { SafariApp } from '../applescript/safari.ts';
 import { McpError, SafariPuppeteerError } from '../common/errors.ts';
 import { SafariMcp } from '../mcp/SafariMcp.ts';
-import { WebDriverBackend } from '../backend/WebDriverBackend.ts';
+import type { BackendName, BrowserSession } from '../backend/types.ts';
+import { WebDriverSession } from '../backend/sessions.ts';
 import type { WebDriverClient } from '../webdriver/client.ts';
-import type { SafariDriverProcess } from '../webdriver/safaridriver.ts';
 import { Page, type Viewport } from './Page.ts';
 
 /**
@@ -16,8 +16,7 @@ import { Page, type Viewport } from './Page.ts';
  * active window handle (see {@link Page.bringToDriver}).
  */
 export class Browser extends EventEmitter {
-  #client: WebDriverClient;
-  #process: SafariDriverProcess | null;
+  #session: BrowserSession;
   #safari: SafariApp;
   #pages = new Map<string, Page>();
   #defaultViewport: Viewport | null;
@@ -31,17 +30,15 @@ export class Browser extends EventEmitter {
   #mcpStarting: Promise<SafariMcp> | null = null;
 
   constructor(options: {
-    client: WebDriverClient;
-    process: SafariDriverProcess | null;
+    session: BrowserSession;
     safari: SafariApp;
     defaultViewport?: Viewport | null;
     capabilities?: Record<string, unknown>;
-    /** safaridriver to run with `--mcp`. Null disables the MCP channel. */
+    /** safaridriver to run with `--mcp`. Null disables the side MCP channel. */
     mcpBinary?: string | null;
   }) {
     super();
-    this.#client = options.client;
-    this.#process = options.process;
+    this.#session = options.session;
     this.#safari = options.safari;
     this.#defaultViewport = options.defaultViewport ?? null;
     this.#capabilities = options.capabilities ?? {};
@@ -92,9 +89,26 @@ export class Browser extends EventEmitter {
     return this.#capabilities;
   }
 
-  /** Low-level escape hatch: the raw WebDriver client. */
+  /** Which backend drives this browser's pages. */
+  get backendName(): BackendName {
+    return this.#session.name;
+  }
+
+  /**
+   * Low-level escape hatch: the raw WebDriver client.
+   *
+   * Only meaningful on the WebDriver backend; the MCP backend speaks no
+   * WebDriver, so this throws rather than returning something unusable.
+   */
   get client(): WebDriverClient {
-    return this.#client;
+    const session = this.#session;
+    if (!(session instanceof WebDriverSession)) {
+      throw new SafariPuppeteerError(
+        `The "${session.name}" backend does not speak WebDriver, so browser.client is unavailable.\n` +
+          "Launch with backend: 'webdriver' (the default) if you need it.",
+      );
+    }
+    return session.client;
   }
 
   /** Low-level escape hatch: AppleScript control of the Safari app. */
@@ -125,7 +139,7 @@ export class Browser extends EventEmitter {
    * Called once during launch/connect.
    */
   async initialize(): Promise<Page> {
-    const handle = await this.#client.getWindowHandle();
+    const handle = await this.#session.currentHandle();
     const page = this.#adopt(handle);
     if (this.#defaultViewport) {
       await page.setViewport(this.#defaultViewport).catch(() => {
@@ -138,9 +152,8 @@ export class Browser extends EventEmitter {
   /** Open a new tab and return it as a Page. */
   async newPage(): Promise<Page> {
     this.#assertOpen();
-    const { handle } = await this.#client.newWindow('tab');
+    const handle = await this.#session.newTab();
     const page = this.#adopt(handle);
-    await this.#client.switchToWindow(handle);
     if (this.#defaultViewport) {
       await page.setViewport(this.#defaultViewport).catch(() => {});
     }
@@ -155,7 +168,7 @@ export class Browser extends EventEmitter {
    */
   async pages(): Promise<Page[]> {
     this.#assertOpen();
-    const handles = await this.#client.getWindowHandles();
+    const handles = await this.#session.listHandles();
     const live = new Set(handles);
 
     for (const [handle, page] of this.#pages) {
@@ -193,7 +206,7 @@ export class Browser extends EventEmitter {
   #adopt(handle: string): Page {
     const existing = this.#pages.get(handle);
     if (existing) return existing;
-    const page = new Page(new WebDriverBackend(this.#client, handle), handle, this.#safari);
+    const page = new Page(this.#session.createBackend(handle), handle, this.#safari);
     this.#pages.set(handle, page);
     return page;
   }
@@ -217,8 +230,7 @@ export class Browser extends EventEmitter {
 
     await this.#mcp?.close().catch(() => {});
     this.#mcp = null;
-    await this.#client.deleteSession().catch(() => {});
-    await this.#process?.kill();
+    await this.#session.dispose();
     this.emit('disconnected');
   }
 

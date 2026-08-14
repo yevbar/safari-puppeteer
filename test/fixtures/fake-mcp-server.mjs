@@ -54,6 +54,8 @@ const TOOLS = [
 
 /** Mutable state so tests can observe the effect of calls. */
 const state = {
+  // One tab already open, so list_tabs is meaningful before create_tab.
+  tabs: ['tab-1'],
   title: 'Fake Page',
   emulatedMedia: null,
   lastArgs: {},
@@ -76,7 +78,15 @@ function callTool(name, args) {
 
   switch (name) {
     case 'list_tabs':
-      return text({ tabs: [{ handle: 'tab-1', title: state.title, url: 'https://example.com/', active: true }] });
+      return text(state.tabs.map((handle) => ({ handle, title: state.title, url: 'https://example.com/', active: true })));
+    case 'create_tab': {
+      const handle = `tab-${state.tabs.length + 1}`;
+      state.tabs.push(handle);
+      return text({ handle });
+    }
+    case 'close_tab':
+      state.tabs = state.tabs.filter((handle) => handle !== args.handle);
+      return text('ok');
     case 'page_info':
       return text({ title: state.title, url: 'https://example.com/' });
     case 'evaluate_javascript': {

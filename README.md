@@ -41,7 +41,8 @@ This library is a Puppeteer-API-compatible facade over that protocol:
 | `src/webdriver/client.ts` | Typed W3C WebDriver client over `fetch` |
 | `src/webdriver/safaridriver.ts` | Spawns and health-checks the `safaridriver` process |
 | `src/applescript/` | `osascript` bridge for what WebDriver cannot reach |
-| `src/mcp/` | Optional `safaridriver --mcp` channel for network/console inspection |
+| `src/mcp/` | Optional `safaridriver --mcp` client |
+| `src/backend/` | `PageBackend` interface, and the WebDriver and MCP implementations |
 | `src/api/` | `Browser` / `Page` / `ElementHandle` / `Keyboard` / `Mouse` |
 
 Why AppleScript as well? A WebDriver session is sandboxed to the window it
@@ -164,7 +165,7 @@ alternative, rather than failing silently or pretending to work:
 | `launch({ headless: true })` | Safari has no headless mode | Move the window off-screen |
 | `page.pdf()` | safaridriver does not implement WebDriver `print` | AppleScript print flow, or render server-side |
 | `page.setRequestInterception()` | No channel can modify traffic: WebDriver has no network layer, MCP only observes, BiDi's `network` module is missing | Local proxy |
-| `page.networkRequests()` | MCP cannot see WebDriver-owned tabs | `browser.mcp()` on a tab MCP created |
+| `page.networkRequests()` | The WebDriver backend has no network layer | `launch({ backend: 'mcp' })` |
 | `page.setUserAgent()` | No capability or endpoint exists | Develop → User Agent menu |
 | `page.emulate()` | No CDP Emulation domain | `setViewport`, or a real device/simulator |
 | `page.emulateMediaFeatures()` | No CDP Emulation domain; MCP offers media *type* only | Inject CSS with `page.evaluate()` |
@@ -233,50 +234,75 @@ pointer tests with an explanation rather than timing out. A remote or headless
 CI runner has the same problem for the same reason — that is one of several
 reasons Safari automation needs a real, unlocked GUI session.
 
-## The MCP channel (optional)
+## Backends
 
-Safari Technology Preview 247+ / Safari 27 beta ship `safaridriver --mcp`, an
-official Model Context Protocol server. It adds the one thing WebDriver has no
-answer for: read-only visibility into network traffic.
+Pages are driven by a **backend**. There are two, and they are not equally
+capable — which is why the choice is explicit and the default is conservative.
 
-**Read this part before building on it.** The MCP server is not a view onto the
-pages you are driving. It is a *separate browsing context* that sees only tabs
-it created itself. Measured on Technology Preview 249, while a WebDriver session
-holds a tab, `list_tabs` returns `[]` and `page_info` answers `No active tab`.
+```ts
+launch({ backend: 'webdriver' })   // default: stable Safari, full API
+launch({ backend: 'mcp', safaridriverPath: TECH_PREVIEW_SAFARIDRIVER })
+```
 
-That is why there is no `page.networkRequests()`: routing it through MCP would
-have reported on a different page than the one you navigated, silently. It
-throws with an explanation instead.
-
-So the working shape is an independent session that you drive with MCP's own
-tab tools:
+The MCP backend exists for one reason: **network inspection that applies to the
+page you are actually driving**. The `safaridriver --mcp` server can only
+observe tabs it created itself, so while a WebDriver session owns the page there
+is no way to see its traffic. Making MCP the only channel is what puts
+`page.networkRequests()` within reach.
 
 ```ts
 import { launch, TECH_PREVIEW_SAFARIDRIVER } from 'safari-puppeteer';
 
-const browser = await launch({
-  mcp: true,
-  safaridriverPath: TECH_PREVIEW_SAFARIDRIVER,
-});
+const browser = await launch({ backend: 'mcp', safaridriverPath: TECH_PREVIEW_SAFARIDRIVER });
+const [page] = await browser.pages();
 
-const mcp = await browser.mcp();
-const tab = await mcp.createTab();                  // MCP must own the tab
-await mcp.switchTab(tab.handle);
-await mcp.navigate('https://example.com/', tab.handle);
-
-const { count, requests } = await mcp.listNetworkRequests({ tabHandle: tab.handle });
+await page.goto('https://example.com');
+const { count, requests } = await page.networkRequests();
 // [{ url, method, status, mime_type, response_size_bytes, duration_ms, initiator }]
+
+await page.emulateMediaType('print');
 ```
 
-Capture only covers navigations made *after* the tab exists, so that ordering
-is load-bearing — navigate first and the list comes back empty.
+### What each backend can do
 
-`mcp: true` reuses whichever `safaridriverPath` you are already driving Safari
-with, because pointing a stable-Safari WebDriver session at a Technology Preview
-MCP server would observe a different browser entirely. It throws at launch, with
-install instructions, if that driver has no `--mcp`.
+| | `webdriver` | `mcp` |
+|---|---|---|
+| Stable Safari | ✅ | ❌ Technology Preview 247+ only |
+| `goto`, `evaluate`, `$eval`, `$$eval`, `waitFor*` | ✅ | ✅ |
+| `screenshot({ fullPage })` | emulated by resizing | ✅ native |
+| `page.networkRequests()` | ❌ no network layer | ✅ **the reason to use it** |
+| `page.emulateMediaType()` | ❌ | ✅ (type only, not features) |
+| Console and dialog events | ✅ | ✅ (server-side buffer, so nothing is missed) |
+| `page.$`, `$$`, `evaluateHandle` | ✅ | ❌ no element references |
+| `page.cookies()` and friends | ✅ | ❌ no cookie tool |
+| `enterFrame`, `$x`, `windowRect` | ✅ | ❌ |
+| `page.keyboard` / `page.mouse` | ✅ W3C Actions | ❌ selector-level input only |
+| Input speed | fast | ~400 ms settle per interaction |
 
-Install and enable:
+Anything a backend cannot do throws `UnsupportedOperationError` naming the
+backend and the alternative, so a script that outgrows the MCP backend says so
+rather than misbehaving.
+
+Two behaviours of the MCP backend are worth knowing:
+
+- **Recording must start before the traffic.** The first `list_network_requests`
+  call arms capture and returns nothing. The backend arms it before your first
+  navigation so `page.networkRequests()` just works, but the same rule applies
+  if you drive `browser.mcp()` yourself — call `startNetworkCapture()` first.
+- **Loopback traffic is never recorded.** Navigating to `127.0.0.1` produces a
+  working page and an empty request log, while the next navigation to a public
+  origin in the same tab is captured normally. Local fixture servers are
+  invisible to it.
+
+### The side channel
+
+`launch({ mcp: true })` is different: it keeps the WebDriver backend and starts
+an MCP server *alongside* it, reachable through `browser.mcp()`. That server is
+an independent browsing context — it cannot see your pages — so use it only for
+work you drive through its own tabs. If you want inspection of your own pages,
+use `backend: 'mcp'` instead.
+
+### Setup for the MCP backend
 
 ```bash
 brew install --cask safari-technology-preview
@@ -291,41 +317,11 @@ and enabling the toggle in one does nothing for the other:
 
 `npm run doctor` reports whether any driver on the machine supports `--mcp`.
 
-### What it does and does not add
-
-Measured against Technology Preview 249, not taken from the docs:
-
-| | |
-|---|---|
-| ✅ `mcp.listNetworkRequests()` | Real detail: method, status, MIME type, size, timing, initiator |
-| ✅ `mcp.getNetworkRequest(id)` | Headers and body for one request |
-| ✅ `mcp.screenshot({ fullPage })` | Native, not emulated by resizing the window |
-| ✅ `mcp.pageContent()` | Accessibility tree, event listeners, rects, subframes |
-| ⚠️ `mcp.setEmulatedMediaType()` | Media **type** (`screen`/`print`) only — *not* `prefers-color-scheme` |
-| ✅ `mcp.evaluate()` | Works — but the tool's input is a *function body*, not an expression |
-| ❌ Loopback traffic | Requests to `127.0.0.1` are never recorded |
-| ❌ Observing your Puppeteer page | Separate browsing context, see above |
-| ❌ Request interception | Observation only — no blocking or modification |
-
-Three of these are worth dwelling on, because the docs imply otherwise:
-
-- **`set_emulated_media` is not `emulateMediaFeatures`.** Its schema takes a
-  string — a CSS media *type*. There is no way to set `prefers-color-scheme`,
-  and passing an object fails with `Invalid arguments: Missing required 'media'`.
-- **`evaluate_javascript` takes a function body, not an expression.** Sending
-  `1+1` evaluates and discards, answering `null`; `return 1+1` gives `2`. Our
-  `mcp.evaluate()` adds the `return` for you, and `mcp.evaluateBody()` passes
-  statements through untouched.
-- **Local fixture servers are invisible.** Navigating a single tab to
-  `127.0.0.1` records nothing, while the very next navigation to a public
-  origin in that same tab is captured normally. That rules out the usual
-  hermetic-test pattern of serving fixtures locally.
-
-The MCP server is itself backed by WebDriver internally, so it needs the same
-Safari permission — but it only discovers that on the first tool call that
-touches the browser. `initialize` and `tools/list` succeed regardless, which
-makes a missing toggle look like a tool bug rather than a setup step. We
-translate that error into the fix.
+The server is itself backed by WebDriver internally, so it needs that same
+permission — but only discovers it on the first tool call that touches the
+browser. `initialize` and `tools/list` succeed regardless, which makes a missing
+toggle look like a tool bug rather than a setup step. We translate that error
+into the fix.
 
 ## Why not WebDriver BiDi?
 

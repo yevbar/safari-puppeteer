@@ -1,4 +1,6 @@
 import { SafariApp } from './applescript/safari.ts';
+import { McpSession, WebDriverSession } from './backend/sessions.ts';
+import type { BackendName } from './backend/types.ts';
 import { McpError, SafariDriverError, UnsupportedOperationError } from './common/errors.ts';
 import { Browser } from './api/Browser.ts';
 import type { Viewport } from './api/Page.ts';
@@ -51,6 +53,16 @@ export interface LaunchOptions {
    * to use a different binary for the MCP channel than for WebDriver.
    */
   mcp?: boolean | string;
+  /**
+   * Which automation channel drives pages.
+   *
+   * `'webdriver'` (the default) is the only one that works on a stable Safari.
+   * `'mcp'` drives everything through `safaridriver --mcp`, which requires
+   * Safari Technology Preview 247+ and gives up element handles, cookies,
+   * frames, XPath, window geometry, and the low-level Actions API — in
+   * exchange for `page.networkRequests()` working on the page you are driving.
+   */
+  backend?: BackendName;
 }
 
 export interface ConnectOptions {
@@ -83,10 +95,15 @@ export async function launch(options: LaunchOptions = {}): Promise<Browser> {
   }
 
   const driverBinary = options.safaridriverPath ?? DEFAULT_SAFARIDRIVER;
+  const backend = options.backend ?? 'webdriver';
 
   // Resolved before spawning anything, so an unsupported driver fails fast with
   // install instructions rather than after a browser window has appeared.
   const mcpBinary = await resolveMcpBinary(options.mcp, driverBinary);
+
+  if (backend === 'mcp') {
+    return launchMcpBackend(options, driverBinary);
+  }
 
   const process = await SafariDriverProcess.start({
     binary: driverBinary,
@@ -120,12 +137,49 @@ export async function launch(options: LaunchOptions = {}): Promise<Browser> {
   await client.setTimeouts({ implicit: 0 }).catch(() => {});
 
   const browser = new Browser({
-    client,
-    process,
+    session: new WebDriverSession(client, process),
     safari: new SafariApp({ appName: options.appName }),
     defaultViewport: options.defaultViewport === undefined ? null : options.defaultViewport,
     capabilities: created.capabilities,
     mcpBinary,
+  });
+
+  await browser.initialize();
+  return browser;
+}
+
+/**
+ * Launch with `safaridriver --mcp` as the only channel.
+ *
+ * No WebDriver session is created at all — that is the point. The MCP server
+ * can only observe tabs it owns, so anything else would put the pages beyond
+ * reach of `page.networkRequests()`.
+ */
+async function launchMcpBackend(options: LaunchOptions, driverBinary: string): Promise<Browser> {
+  const { isMcpSupported, MCP_UNAVAILABLE_HINT, SafariMcp } = await import('./mcp/SafariMcp.ts');
+
+  if (!(await isMcpSupported(driverBinary))) {
+    throw new McpError(
+      `${driverBinary} does not support --mcp, so backend: 'mcp' cannot work.\n\n${MCP_UNAVAILABLE_HINT}`,
+    );
+  }
+
+  const mcp = await SafariMcp.start({ binary: driverBinary, dumpio: options.dumpio });
+  const session = new McpSession(mcp);
+
+  try {
+    await session.initialize();
+  } catch (cause) {
+    await mcp.close().catch(() => {});
+    throw new McpError(
+      `Could not open a tab through the MCP server: ${(cause as Error).message}`,
+    );
+  }
+
+  const browser = new Browser({
+    session,
+    safari: new SafariApp({ appName: options.appName }),
+    defaultViewport: options.defaultViewport === undefined ? null : options.defaultViewport,
   });
 
   await browser.initialize();
@@ -199,8 +253,7 @@ export async function connect(options: ConnectOptions): Promise<Browser> {
   }
 
   const browser = new Browser({
-    client,
-    process: null,
+    session: new WebDriverSession(client, null),
     safari: new SafariApp({ appName: options.appName }),
     defaultViewport: options.defaultViewport === undefined ? null : options.defaultViewport,
     capabilities,
@@ -212,6 +265,10 @@ export async function connect(options: ConnectOptions): Promise<Browser> {
 }
 
 export { Browser } from './api/Browser.ts';
+export type { BackendFeature, BackendName, PageBackend, BrowserSession } from './backend/types.ts';
+export { WebDriverBackend } from './backend/WebDriverBackend.ts';
+export { McpBackend } from './backend/McpBackend.ts';
+export { WebDriverSession, McpSession } from './backend/sessions.ts';
 export { Page } from './api/Page.ts';
 export type { Viewport, ScreenshotOptions, WaitForOptions, ConsoleMessage, Dialog, Cookie } from './api/Page.ts';
 export { JSHandle, ElementHandle } from './api/JSHandle.ts';

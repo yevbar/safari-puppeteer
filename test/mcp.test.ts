@@ -20,6 +20,10 @@ import {
   SafariMcp,
 } from '../src/mcp/SafariMcp.ts';
 import { jsonOf, McpTransport, textOf } from '../src/mcp/transport.ts';
+import { McpSession } from '../src/backend/sessions.ts';
+import { Browser } from '../src/api/Browser.ts';
+import { SafariApp } from '../src/applescript/safari.ts';
+import type { Page } from '../src/api/Page.ts';
 
 const FAKE_SERVER = fileURLToPath(new URL('./fixtures/fake-mcp-server.mjs', import.meta.url));
 
@@ -302,5 +306,85 @@ describe('attach probe', () => {
     // integration useless.
     const seen = await mcp.canSee(async () => 'unrelated title');
     assert.equal(seen, false);
+  });
+});
+
+
+describe('MCP backend capability gating', () => {
+  /**
+   * A full Browser/Page stack over the fake server. This is where the point of
+   * the backend split gets tested: the MCP backend must refuse what it cannot
+   * do with an error naming the backend, rather than failing somewhere deep in
+   * a tool call.
+   */
+  async function mcpPage(): Promise<{ browser: Browser; page: Page }> {
+    const mcp = await startMcp();
+    const session = new McpSession(mcp);
+    const handle = await session.initialize();
+    const browser = new Browser({ session, safari: new SafariApp() });
+    const page = await browser.initialize();
+    assert.equal(handle, 'tab-1');
+    return { browser, page };
+  }
+
+  it('reports the backend it is running on', async () => {
+    const { browser, page } = await mcpPage();
+    assert.equal(browser.backendName, 'mcp');
+    assert.equal(page.backend.name, 'mcp');
+  });
+
+  it('declares the capabilities it has and lacks', async () => {
+    const { page } = await mcpPage();
+    for (const feature of ['networkInspection', 'mediaType', 'dialogs'] as const) {
+      assert.ok(page.supports(feature), `expected ${feature} to be supported`);
+    }
+    for (const feature of ['elementHandles', 'cookies', 'frames', 'xpath', 'windowRect', 'lowLevelInput'] as const) {
+      assert.equal(page.supports(feature), false, `expected ${feature} to be unsupported`);
+    }
+  });
+
+  it('refuses element handles by name, pointing at the alternative', async () => {
+    const { page } = await mcpPage();
+    await assert.rejects(() => page.$('h1'), (error: Error) => {
+      assert.match(error.message, /page\.\$\(\)/);
+      assert.match(error.message, /mcp/);
+      assert.match(error.message, /page\.\$eval/);
+      return true;
+    });
+    await assert.rejects(() => page.$$('p'), /elementHandles/);
+    await assert.rejects(() => page.evaluateHandle(() => 1), /elementHandles/);
+  });
+
+  it('refuses cookies, frames, XPath and window geometry', async () => {
+    const { page } = await mcpPage();
+    await assert.rejects(() => page.cookies(), /cookies/);
+    await assert.rejects(() => page.enterFrame(0), /frames/);
+    await assert.rejects(() => page.$x('//h1'), /xpath/);
+    await assert.rejects(() => page.windowRect(), /windowRect/);
+  });
+
+  it('refuses the low-level input API but keeps the selector-level one', async () => {
+    const { page } = await mcpPage();
+    assert.throws(() => page.keyboard, /lowLevelInput|Actions API/);
+    assert.throws(() => page.mouse, /lowLevelInput|Actions API/);
+    // The selector-level helpers are implemented, so they must not throw for
+    // being unsupported.
+    assert.equal(typeof page.click, 'function');
+  });
+
+  it('exposes network inspection, which the WebDriver backend cannot', async () => {
+    const { page } = await mcpPage();
+    const result = (await page.networkRequests()) as { count: number };
+    assert.equal(result.count, 2);
+  });
+
+  it('throws for browser.client, which does not exist here', async () => {
+    const { browser } = await mcpPage();
+    assert.throws(() => browser.client, /does not speak WebDriver/);
+  });
+
+  it('still refuses request interception, as every backend does', async () => {
+    const { page } = await mcpPage();
+    await assert.rejects(() => page.setRequestInterception(), /not supported/);
   });
 });

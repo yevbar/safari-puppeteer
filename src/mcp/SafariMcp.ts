@@ -18,6 +18,10 @@
  * {@link SafariMcp.pageContent}, not by CSS selector or element reference.
  */
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { readFile, unlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { McpError } from '../common/errors.ts';
@@ -200,10 +204,11 @@ export class SafariMcp {
    * This is the capability classic WebDriver has no equivalent for. It is
    * read-only: there is no interception, blocking, or modification.
    *
-   * Capture is per-tab and only covers navigations that happen *after* the tab
-   * exists, so the working order is `createTab()` → `switchTab()` →
-   * `navigate()` → `listNetworkRequests()`. Requests made before that return
-   * an empty list rather than an error.
+   * **Recording has to be started before the traffic happens.** The first call
+   * to this tool arms the capture for that tab and returns an empty list; only
+   * navigations after that are recorded. Call it once, then navigate, then
+   * call it again — {@link SafariMcp.startNetworkCapture} exists to make that
+   * first call read as intent rather than as a discarded result.
    *
    * `clear` empties the buffer after reading, which is how you scope a
    * capture to one navigation.
@@ -217,6 +222,16 @@ export class SafariMcp {
       ...(options.clear === undefined ? {} : { clear: options.clear }),
       ...(options.tabHandle === undefined ? {} : { tab_handle: options.tabHandle }),
     });
+  }
+
+  /**
+   * Begin recording network activity for a tab.
+   *
+   * Arming is what the first `list_network_requests` call does implicitly;
+   * naming it keeps the ordering requirement visible at the call site.
+   */
+  async startNetworkCapture(tabHandle?: string): Promise<void> {
+    await this.listNetworkRequests(tabHandle === undefined ? {} : { tabHandle });
   }
 
   /** Detail for a single observed request, including headers and body. */
@@ -342,18 +357,38 @@ export class SafariMcp {
   /**
    * PNG screenshot of the MCP server's active tab, base64-encoded.
    *
-   * Unlike our WebDriver path, `full_page` here is native rather than emulated
-   * by resizing the window.
+   * `full_page` here is native rather than emulated by resizing the window.
+   *
+   * The tool does not return image bytes: it writes a PNG to disk and answers
+   * with prose naming the file. Rather than parse that sentence, we hand it an
+   * explicit `savePath`, read the file, and clean up — so callers still get
+   * base64 like every other screenshot path in this library.
    */
   async screenshot(options: { fullPage?: boolean; node?: unknown; savePath?: string } = {}): Promise<string> {
+    const target = options.savePath ?? join(tmpdir(), `safari-puppeteer-${randomUUID()}.png`);
+
     const result = await this.call('screenshot', {
       ...(options.fullPage === undefined ? {} : { full_page: options.fullPage }),
       ...(options.node === undefined ? {} : { node: options.node }),
-      ...(options.savePath === undefined ? {} : { savePath: options.savePath }),
+      savePath: target,
     });
+
+    // Newer builds may return the image inline; prefer that when present.
     const image = result.content?.find((part) => part.type === 'image');
     if (image && typeof image['data'] === 'string') return image['data'];
-    return textOf(result);
+
+    try {
+      return (await readFile(target)).toString('base64');
+    } catch (cause) {
+      throw new McpError(
+        `The screenshot tool reported "${textOf(result)}" but ${target} could not be read: ` +
+          `${(cause as Error).message}`,
+        { tool: 'screenshot' },
+      );
+    } finally {
+      // Only our own temp file is ours to remove.
+      if (options.savePath === undefined) await unlink(target).catch(() => {});
+    }
   }
 
   // --- The decisive question -------------------------------------------------

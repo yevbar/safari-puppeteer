@@ -32,7 +32,7 @@ const SUPPORTED: ReadonlySet<BackendFeature> = new Set<BackendFeature>([
   'xpath',
   'dialogs',
   'windowRect',
-  'trustedInput',
+  'lowLevelInput',
 ]);
 
 export class WebDriverBackend implements PageBackend {
