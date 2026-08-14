@@ -204,6 +204,17 @@ try {
     assert.match(error.message, /Reason: because/);
     assert.match(error.message, /Alternative: do y/);
   });
+
+  check('the MCP channel is exported and degrades with instructions', async () => {
+    for (const name of ['SafariMcp', 'McpTransport', 'isMcpSupported', 'McpError']) {
+      assert.equal(typeof mod[name], 'function', `${name} must be exported`);
+    }
+    assert.equal(mod.SAFARI_MCP_TOOLS.length, 17);
+    assert.match(mod.MCP_UNAVAILABLE_HINT, /safari-technology-preview/);
+
+    // A driver that cannot serve MCP must be reported, not assumed.
+    assert.equal(await mod.isMcpSupported('/nonexistent/safaridriver'), false);
+  });
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }

@@ -41,6 +41,7 @@ This library is a Puppeteer-API-compatible facade over that protocol:
 | `src/webdriver/client.ts` | Typed W3C WebDriver client over `fetch` |
 | `src/webdriver/safaridriver.ts` | Spawns and health-checks the `safaridriver` process |
 | `src/applescript/` | `osascript` bridge for what WebDriver cannot reach |
+| `src/mcp/` | Optional `safaridriver --mcp` channel for network/console inspection |
 | `src/api/` | `Browser` / `Page` / `ElementHandle` / `Keyboard` / `Mouse` |
 
 Why AppleScript as well? A WebDriver session is sandboxed to the window it
@@ -162,9 +163,10 @@ alternative, rather than failing silently or pretending to work:
 |---|---|---|
 | `launch({ headless: true })` | Safari has no headless mode | Move the window off-screen |
 | `page.pdf()` | safaridriver does not implement WebDriver `print` | AppleScript print flow, or render server-side |
-| `page.setRequestInterception()` | Classic WebDriver has no network layer | Local proxy, or stub `fetch` in-page |
+| `page.setRequestInterception()` | No channel can modify traffic: WebDriver has no network layer, MCP only observes, BiDi's `network` module is missing | `page.networkRequests()` to inspect; local proxy to modify |
 | `page.setUserAgent()` | No capability or endpoint exists | Develop → User Agent menu |
-| `page.emulate()` / `emulateMediaFeatures()` | No CDP Emulation domain | `setViewport`, or a real device/simulator |
+| `page.emulate()` | No CDP Emulation domain | `setViewport`, or a real device/simulator |
+| `page.emulateMediaFeatures()` | Needs the MCP channel | `launch({ mcp: true })` — see [The MCP channel](#the-mcp-channel-optional) |
 | `page.setOfflineMode()` | No network control | Network Link Conditioner |
 | `page.screenshot({ clip })` | No region-capture command | `elementHandle.screenshot()`, or crop yourself |
 | `page.cookies(...urls)` | Driver only sees the active document | Navigate per origin |
@@ -230,29 +232,104 @@ pointer tests with an explanation rather than timing out. A remote or headless
 CI runner has the same problem for the same reason — that is one of several
 reasons Safari automation needs a real, unlocked GUI session.
 
+## The MCP channel (optional)
+
+Safari Technology Preview 247+ / Safari 27 beta ship `safaridriver --mcp`, an
+official Model Context Protocol server. It is a **second, independent**
+automation channel, and it adds the one thing WebDriver has no answer for:
+read-only visibility into network traffic.
+
+```ts
+import { launch, TECH_PREVIEW_SAFARIDRIVER } from 'safari-puppeteer';
+
+const browser = await launch({
+  mcp: true,
+  safaridriverPath: TECH_PREVIEW_SAFARIDRIVER,
+});
+const [page] = await browser.pages();
+await page.goto('https://example.com');
+
+const requests = await page.networkRequests();     // read-only inspection
+await page.emulateMediaFeatures({ 'prefers-color-scheme': 'dark' });
+
+const mcp = await browser.mcp();                   // full 17-tool escape hatch
+await mcp.consoleMessages({ limit: 50 });
+```
+
+`mcp: true` reuses whichever `safaridriverPath` you are already driving Safari
+with, because pointing a stable-Safari WebDriver session at a Technology Preview
+MCP server would observe a different browser entirely. It throws at launch, with
+install instructions, if that driver has no `--mcp`.
+
+Install and enable:
+
+```bash
+brew install --cask safari-technology-preview
+"/Applications/Safari Technology Preview.app/Contents/MacOS/safaridriver" --enable
+```
+
+Then in **Safari Technology Preview** — its settings are separate from Safari's,
+and enabling the toggle in one does nothing for the other:
+
+1. Settings → Advanced → *Show features for web developers*
+2. Settings → Developer → *Allow remote automation and external agents*
+
+`npm run doctor` reports whether any driver on the machine supports `--mcp`.
+
+### What it does and does not add
+
+| | |
+|---|---|
+| ✅ `page.networkRequests()` | Read-only request list — URL, method, status, type |
+| ✅ `page.networkRequest(id)` | Headers, timing, body for one request |
+| ✅ `page.emulateMediaFeatures()` | The only emulation API that works at all |
+| ✅ `mcp.consoleMessages()` | Server-side console capture, no in-page hook |
+| ✅ `mcp.screenshot({ fullPage })` | Native, not emulated by resizing |
+| ❌ `page.setRequestInterception()` | Still impossible — observation only, no modification |
+
+The MCP server is itself backed by WebDriver internally, so it needs the same
+Safari permission — but it only discovers that on the first tool call that
+touches the browser. `initialize` and `tools/list` succeed regardless, which
+makes a missing toggle look like a tool bug rather than a setup step. We
+translate that error into the fix.
+
 ## Why not WebDriver BiDi?
 
 BiDi is the protocol that would let Puppeteer drive Safari properly, and
-Puppeteer already supports a BiDi transport. But as of **Safari 18.6 / macOS
-15.6**, `safaridriver` does not implement it: there is no `--bidi` flag and no
-`webSocketUrl` capability. Upstream in WebKit, the `session`, `script`,
-`network`, and `input` BiDi modules are still open bugs, and the WebSocket
-server that does exist is the libsoup implementation used by WebKitGTK/WPE, not
-by Apple's driver.
+Puppeteer already supports a BiDi transport. Apple has now started shipping it:
+`safaridriver` in **Safari 26.6** has a `-b, --bidi` flag.
 
-So classic WebDriver is not a shortcut here — it is the only option. If Apple
-ships BiDi, the `src/api/` layer can be repointed at it without changing the
-public API.
+It is not usable as a backend yet. Measured against Safari 26.6:
 
-Note also that Safari 27 / STP 247 added `safaridriver --mcp`, an official MCP
-server with network and console inspection. If you want those specific
-capabilities and can require a beta Safari, that is worth a look.
+| Module | State |
+|---|---|
+| `session`, `browsingContext` | Working — `getTree`, `navigate`, and real `load`/`domContentLoaded` events |
+| `log` | Working — `log.entryAdded` fires |
+| `script` | Present, but values come back as `{type:"object", value:"<JSON string>"}` rather than proper RemoteValues |
+| `network` | **Missing** — `unknown command: 'network' domain was not found` |
+| `input` | **Missing** — `unknown command: 'input' domain was not found` |
+| `storage` | Errors with `InternalError` |
+
+Two traps worth knowing. The spec-standard `webSocketUrl: true` capability
+returns the boolean `true` and opens no socket; you must pass Apple's
+`safari:experimentalWebSocketUrl: true` to get a real URL. And the port given to
+`--bidi` is ignored — the server picks its own.
+
+Most importantly, subscribing to `network.beforeRequestSent` **succeeds and then
+never fires an event**, which is a worse failure mode than the honest
+`unknown command` you get from `network.addIntercept`. So BiDi does not yet
+close the request-interception gap either.
+
+Classic WebDriver therefore remains the only viable backend. When the `network`,
+`input`, and `script` modules land, the `src/api/` layer can be repointed at
+BiDi without changing the public API.
 
 ## Development
 
 ```bash
 npm run doctor            # check the environment
-npm test                  # unit tests, no Safari needed
+npm test                  # unit + MCP tests, no Safari needed
+npm run test:mcp          # MCP protocol tests against a fake stdio server
 npm run test:integration  # drives a real Safari window; skips if unavailable
 npm run test:package      # pack, install, and import the built tarball
 npm run build             # emit dist/
@@ -276,7 +353,9 @@ npm publish     # publishConfig.access is already set to public
 
 ## Requirements
 
-macOS with Safari. Node 18+. Tested against Safari 18.6 on macOS 15.6.
+macOS with Safari. Node 18+. Tested against Safari 18.6 on macOS 15.6 and
+Safari 26.6 on macOS 26.6. The optional MCP channel additionally needs Safari
+Technology Preview 247+ (verified against Release 249).
 
 ## License
 

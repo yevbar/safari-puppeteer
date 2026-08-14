@@ -130,6 +130,44 @@ async function checkScreenLock(): Promise<void> {
   );
 }
 
+/**
+ * The MCP channel is optional and preview-only, so its absence is a note
+ * rather than a warning.
+ */
+async function checkMcp(): Promise<void> {
+  const { isMcpSupported, MCP_UNAVAILABLE_HINT } = await import('../src/mcp/SafariMcp.ts');
+  const { DEFAULT_SAFARIDRIVER, TECH_PREVIEW_SAFARIDRIVER } = await import(
+    '../src/webdriver/safaridriver.ts'
+  );
+
+  const supported: string[] = [];
+  for (const binary of [DEFAULT_SAFARIDRIVER, TECH_PREVIEW_SAFARIDRIVER]) {
+    if (await isMcpSupported(binary)) supported.push(binary);
+  }
+
+  if (supported.length === 0) {
+    record(
+      'MCP channel (optional)',
+      'warn',
+      'no safaridriver on this machine supports --mcp',
+      MCP_UNAVAILABLE_HINT,
+    );
+    return;
+  }
+
+  const usesPreview = supported.every((binary) => binary === TECH_PREVIEW_SAFARIDRIVER);
+  record(
+    'MCP channel (optional)',
+    'pass',
+    `--mcp supported by ${supported.join(', ')}`,
+    usesPreview
+      ? 'Only Technology Preview supports it, so pass both options together:\n' +
+        `  launch({ mcp: true, safaridriverPath: '${TECH_PREVIEW_SAFARIDRIVER}' })\n` +
+        'Remote automation must be enabled in Technology Preview separately from Safari.'
+      : undefined,
+  );
+}
+
 /** AppleScript is optional; only some features need it. */
 async function checkAppleScript(): Promise<void> {
   try {
@@ -189,6 +227,7 @@ async function main(): Promise<void> {
   await checkSafari();
   await checkSafariDriver();
   await checkScreenLock();
+  await checkMcp();
   await checkAppleScript();
   await checkAppleEventsJavaScript();
 

@@ -1,7 +1,8 @@
 import { EventEmitter } from 'node:events';
 
 import { SafariApp } from '../applescript/safari.ts';
-import { SafariPuppeteerError } from '../common/errors.ts';
+import { McpError, SafariPuppeteerError } from '../common/errors.ts';
+import { SafariMcp } from '../mcp/SafariMcp.ts';
 import type { WebDriverClient } from '../webdriver/client.ts';
 import type { SafariDriverProcess } from '../webdriver/safaridriver.ts';
 import { Page, type Viewport } from './Page.ts';
@@ -22,12 +23,20 @@ export class Browser extends EventEmitter {
   #capabilities: Record<string, unknown>;
   #closed = false;
 
+  /** Set when the caller asked for the MCP channel. */
+  #mcpBinary: string | null;
+  #mcp: SafariMcp | null = null;
+  /** In-flight start, so concurrent `mcp()` calls share one server. */
+  #mcpStarting: Promise<SafariMcp> | null = null;
+
   constructor(options: {
     client: WebDriverClient;
     process: SafariDriverProcess | null;
     safari: SafariApp;
     defaultViewport?: Viewport | null;
     capabilities?: Record<string, unknown>;
+    /** safaridriver to run with `--mcp`. Null disables the MCP channel. */
+    mcpBinary?: string | null;
   }) {
     super();
     this.#client = options.client;
@@ -35,6 +44,39 @@ export class Browser extends EventEmitter {
     this.#safari = options.safari;
     this.#defaultViewport = options.defaultViewport ?? null;
     this.#capabilities = options.capabilities ?? {};
+    this.#mcpBinary = options.mcpBinary ?? null;
+  }
+
+  /**
+   * The `safaridriver --mcp` channel, started on first use.
+   *
+   * Deliberately lazy: starting it spawns a second driver process, and most
+   * scripts never need it.
+   */
+  async mcp(): Promise<SafariMcp> {
+    if (this.#mcpBinary === null) {
+      throw new McpError(
+        'The MCP channel is not enabled for this browser.\n' +
+          'Launch with mcp: true to enable it.',
+      );
+    }
+    if (this.#mcp !== null) return this.#mcp;
+    if (this.#mcpStarting !== null) return this.#mcpStarting;
+
+    this.#mcpStarting = SafariMcp.start({ binary: this.#mcpBinary })
+      .then((mcp) => {
+        this.#mcp = mcp;
+        return mcp;
+      })
+      .finally(() => {
+        this.#mcpStarting = null;
+      });
+    return this.#mcpStarting;
+  }
+
+  /** Whether the MCP channel was enabled at launch. */
+  get mcpEnabled(): boolean {
+    return this.#mcpBinary !== null;
   }
 
   /** Capabilities safaridriver reported when the session was created. */
@@ -143,7 +185,12 @@ export class Browser extends EventEmitter {
   #adopt(handle: string): Page {
     const existing = this.#pages.get(handle);
     if (existing) return existing;
-    const page = new Page(this.#client, handle, this.#safari);
+    const page = new Page(
+      this.#client,
+      handle,
+      this.#safari,
+      this.#mcpBinary === null ? null : () => this.mcp(),
+    );
     this.#pages.set(handle, page);
     return page;
   }
@@ -165,6 +212,8 @@ export class Browser extends EventEmitter {
     }
     this.#pages.clear();
 
+    await this.#mcp?.close().catch(() => {});
+    this.#mcp = null;
     await this.#client.deleteSession().catch(() => {});
     await this.#process?.kill();
     this.emit('disconnected');

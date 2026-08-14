@@ -1,5 +1,5 @@
 import { SafariApp } from './applescript/safari.ts';
-import { SafariDriverError, UnsupportedOperationError } from './common/errors.ts';
+import { McpError, SafariDriverError, UnsupportedOperationError } from './common/errors.ts';
 import { Browser } from './api/Browser.ts';
 import type { Viewport } from './api/Page.ts';
 import { WebDriverClient } from './webdriver/client.ts';
@@ -39,11 +39,22 @@ export interface LaunchOptions {
   acceptInsecureCerts?: boolean;
   /** ms to wait for safaridriver to become ready. */
   timeout?: number;
+  /**
+   * Also start `safaridriver --mcp`, enabling `page.networkRequests()` and
+   * `page.emulateMediaFeatures()`.
+   *
+   * Requires Safari Technology Preview 247+ / Safari 27 beta; launch throws
+   * with install instructions if the driver does not support it. Pass a string
+   * to use a different binary for the MCP channel than for WebDriver.
+   */
+  mcp?: boolean | string;
 }
 
 export interface ConnectOptions {
   /** Base URL of an already-running safaridriver, e.g. http://127.0.0.1:4444. */
   driverUrl: string;
+  /** Start `safaridriver --mcp` alongside. Pass a path to pick the binary. */
+  mcp?: boolean | string;
   /** Attach to this existing session instead of creating one. */
   sessionId?: string;
   defaultViewport?: Viewport | null;
@@ -68,8 +79,14 @@ export async function launch(options: LaunchOptions = {}): Promise<Browser> {
     );
   }
 
+  const driverBinary = options.safaridriverPath ?? DEFAULT_SAFARIDRIVER;
+
+  // Resolved before spawning anything, so an unsupported driver fails fast with
+  // install instructions rather than after a browser window has appeared.
+  const mcpBinary = await resolveMcpBinary(options.mcp, driverBinary);
+
   const process = await SafariDriverProcess.start({
-    binary: options.safaridriverPath ?? DEFAULT_SAFARIDRIVER,
+    binary: driverBinary,
     port: options.port,
     dumpio: options.dumpio,
     diagnose: options.diagnose,
@@ -105,10 +122,36 @@ export async function launch(options: LaunchOptions = {}): Promise<Browser> {
     safari: new SafariApp({ appName: options.appName }),
     defaultViewport: options.defaultViewport === undefined ? null : options.defaultViewport,
     capabilities: created.capabilities,
+    mcpBinary,
   });
 
   await browser.initialize();
   return browser;
+}
+
+/**
+ * Decide which binary should serve the MCP channel, and verify it can.
+ *
+ * `mcp: true` means "use the same driver I am already driving Safari with",
+ * because mixing a stable-Safari WebDriver session with a Technology Preview
+ * MCP server would observe a different browser entirely.
+ */
+async function resolveMcpBinary(
+  mcp: boolean | string | undefined,
+  driverBinary: string,
+): Promise<string | null> {
+  if (mcp === undefined || mcp === false) return null;
+
+  const binary = typeof mcp === 'string' ? mcp : driverBinary;
+  const { isMcpSupported, MCP_UNAVAILABLE_HINT } = await import('./mcp/SafariMcp.ts');
+
+  if (!(await isMcpSupported(binary))) {
+    throw new McpError(
+      `${binary} does not support --mcp, so launch({ mcp: true }) cannot work.\n\n` +
+        MCP_UNAVAILABLE_HINT,
+    );
+  }
+  return binary;
 }
 
 /**
@@ -119,6 +162,7 @@ export async function launch(options: LaunchOptions = {}): Promise<Browser> {
  */
 export async function connect(options: ConnectOptions): Promise<Browser> {
   const client = new WebDriverClient(options.driverUrl);
+  const mcpBinary = await resolveMcpBinary(options.mcp, DEFAULT_SAFARIDRIVER);
 
   let capabilities: Record<string, unknown> = {};
   if (options.sessionId) {
@@ -142,6 +186,7 @@ export async function connect(options: ConnectOptions): Promise<Browser> {
     safari: new SafariApp({ appName: options.appName }),
     defaultViewport: options.defaultViewport === undefined ? null : options.defaultViewport,
     capabilities,
+    mcpBinary,
   });
 
   await browser.initialize();
@@ -162,12 +207,24 @@ export {
   TECH_PREVIEW_SAFARIDRIVER,
 } from './webdriver/safaridriver.ts';
 export {
+  SafariMcp,
+  isMcpSupported,
+  findMcpCapableDriver,
+  SAFARI_MCP_TOOLS,
+  MCP_UNAVAILABLE_HINT,
+  MCP_REMOTE_AUTOMATION_HINT,
+} from './mcp/SafariMcp.ts';
+export type { SafariMcpOptions, SafariMcpToolName } from './mcp/SafariMcp.ts';
+export { McpTransport, textOf, jsonOf, PROTOCOL_VERSION } from './mcp/transport.ts';
+export type { McpTool, McpToolResult, McpTransportOptions } from './mcp/transport.ts';
+export {
   SafariPuppeteerError,
   TimeoutError,
   TargetCloseError,
   UnsupportedOperationError,
   WebDriverError,
   SafariDriverError,
+  McpError,
 } from './common/errors.ts';
 
 export default { launch, connect };

@@ -9,6 +9,7 @@ import {
   WebDriverError,
 } from '../common/errors.ts';
 import { poll, sleep } from '../common/util.ts';
+import type { SafariMcp } from '../mcp/SafariMcp.ts';
 import type { Rect, WebDriverClient, WebDriverCookie } from '../webdriver/client.ts';
 import { ExecutionContext } from './ExecutionContext.ts';
 import { createHandle, ElementHandle, elementHandleFromId, JSHandle } from './JSHandle.ts';
@@ -90,15 +91,27 @@ export class Page extends EventEmitter {
   /** Scripts re-injected after every navigation, as `evaluateOnNewDocument` promises. */
   #initScripts: string[] = [];
 
+  /**
+   * Supplies the `safaridriver --mcp` channel on demand, when the Browser was
+   * launched with `mcp: true`. Null when MCP was not requested.
+   */
+  #mcpProvider: (() => Promise<SafariMcp>) | null;
+
   readonly keyboard: Keyboard;
   readonly mouse: Mouse;
   readonly touchscreen: Touchscreen;
 
-  constructor(client: WebDriverClient, handle: string, safari: SafariApp) {
+  constructor(
+    client: WebDriverClient,
+    handle: string,
+    safari: SafariApp,
+    mcpProvider: (() => Promise<SafariMcp>) | null = null,
+  ) {
     super();
     this.#client = client;
     this.#handle = handle;
     this.#safari = safari;
+    this.#mcpProvider = mcpProvider;
     this.#context = new ExecutionContext(client);
     this.keyboard = new Keyboard(client);
     this.mouse = new Mouse(client);
@@ -906,14 +919,53 @@ export class Page extends EventEmitter {
     this.#dialogPoller.unref();
   }
 
+  // --- MCP-backed observation ------------------------------------------------
+
+  /**
+   * The `safaridriver --mcp` channel for this browser.
+   *
+   * Only available when the Browser was launched with `mcp: true`. Throws with
+   * setup instructions otherwise, rather than returning null and pushing the
+   * diagnosis onto the caller.
+   */
+  async mcp(): Promise<SafariMcp> {
+    if (this.#mcpProvider === null) {
+      throw new UnsupportedOperationError(
+        'page.mcp()',
+        'The MCP channel was not started for this browser.',
+        "Launch with mcp: true, e.g. launch({ mcp: true, safaridriverPath: TECH_PREVIEW_SAFARIDRIVER }).",
+      );
+    }
+    return this.#mcpProvider();
+  }
+
+  /**
+   * Network requests Safari has observed, via the MCP server.
+   *
+   * This is **observation only** — see {@link Page.setRequestInterception} for
+   * why modifying requests is still not possible. Requires `mcp: true`.
+   */
+  async networkRequests(
+    options: { filter?: string; since?: unknown; clear?: boolean } = {},
+  ): Promise<unknown> {
+    const mcp = await this.mcp();
+    return mcp.listNetworkRequests({ ...options, tabHandle: this.#handle });
+  }
+
+  /** Full detail (headers, timing, body) for one observed request. */
+  async networkRequest(requestId: string | number): Promise<unknown> {
+    const mcp = await this.mcp();
+    return mcp.getNetworkRequest(requestId);
+  }
+
   // --- Explicitly unsupported ------------------------------------------------
 
   setRequestInterception(): Promise<never> {
     return Promise.reject(
       new UnsupportedOperationError(
         'page.setRequestInterception()',
-        'Classic WebDriver has no network layer. Safari exposes request interception only through WebDriver BiDi, which safaridriver does not implement as of Safari 18.x.',
-        'Use a local proxy (mitmproxy, Playwright-style) in front of Safari, or stub `window.fetch`/`XMLHttpRequest` with page.evaluateOnNewDocument().',
+        'Neither of Safari\'s automation channels can modify traffic. Classic WebDriver has no network layer at all; safaridriver --mcp observes requests but cannot intercept them; and WebDriver BiDi\'s `network` module — the one interface that could — is still missing from safaridriver (verified on Safari 26.6: `network` reports "domain was not found").',
+        'For read-only inspection use page.networkRequests() with launch({ mcp: true }). To actually modify traffic, put a local proxy (mitmproxy) in front of Safari, or stub `window.fetch`/`XMLHttpRequest` with page.evaluateOnNewDocument().',
       ),
     );
   }
@@ -938,14 +990,23 @@ export class Page extends EventEmitter {
     );
   }
 
-  emulateMediaFeatures(): Promise<never> {
-    return Promise.reject(
-      new UnsupportedOperationError(
+  /**
+   * Emulate media features, e.g. `{ 'prefers-color-scheme': 'dark' }`.
+   *
+   * Unlike the rest of the emulation family this one *is* reachable, but only
+   * through the MCP server's `set_emulated_media` tool — classic WebDriver has
+   * no equivalent. Requires `mcp: true`.
+   */
+  async emulateMediaFeatures(features: Record<string, unknown>): Promise<void> {
+    if (this.#mcpProvider === null) {
+      throw new UnsupportedOperationError(
         'page.emulateMediaFeatures()',
-        'No CDP Emulation domain is available in real Safari.',
-        'Override the media query result in-page with page.evaluate() by injecting CSS, if your app reads it via matchMedia.',
-      ),
-    );
+        'No CDP Emulation domain is available in real Safari, and classic WebDriver has no media-emulation endpoint.',
+        "Safari Technology Preview 247+ can do this via its MCP server: launch({ mcp: true }). Otherwise override the media query in-page with page.evaluate() by injecting CSS, if your app reads it via matchMedia.",
+      );
+    }
+    const mcp = await this.mcp();
+    await mcp.setEmulatedMedia(features);
   }
 
   setOfflineMode(): Promise<never> {

@@ -57,3 +57,22 @@ export class WebDriverError extends SafariPuppeteerError {
 export class SafariDriverError extends SafariPuppeteerError {
   override name = 'SafariDriverError';
 }
+
+/**
+ * A failure from the `safaridriver --mcp` server: transport, handshake, or a
+ * tool call that came back flagged as an error.
+ */
+export class McpError extends SafariPuppeteerError {
+  override name = 'McpError';
+
+  /** JSON-RPC error code, when the failure came back as a protocol error. */
+  readonly code: number | undefined;
+  /** Tool name, when the failure came from `tools/call`. */
+  readonly tool: string | undefined;
+
+  constructor(message: string, options: { code?: number; tool?: string } = {}) {
+    super(message);
+    this.code = options.code;
+    this.tool = options.tool;
+  }
+}
