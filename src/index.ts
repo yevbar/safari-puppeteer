@@ -40,8 +40,11 @@ export interface LaunchOptions {
   /** ms to wait for safaridriver to become ready. */
   timeout?: number;
   /**
-   * Also start `safaridriver --mcp`, enabling `page.networkRequests()` and
-   * `page.emulateMediaFeatures()`.
+   * Also start `safaridriver --mcp`, making {@link Browser.mcp} available for
+   * network inspection.
+   *
+   * Note that the MCP server is an independent browsing context: it observes
+   * only tabs it created itself, not the pages this Browser drives.
    *
    * Requires Safari Technology Preview 247+ / Safari 27 beta; launch throws
    * with install instructions if the driver does not support it. Pass a string
@@ -96,7 +99,7 @@ export async function launch(options: LaunchOptions = {}): Promise<Browser> {
   const client = new WebDriverClient(process.url);
 
   const capabilities: Record<string, unknown> = {
-    browserName: 'safari',
+    browserName: browserNameFor(driverBinary),
     ...(options.acceptInsecureCerts ? { acceptInsecureCerts: true } : {}),
     ...(options.automaticInspection ? { 'safari:automaticInspection': true } : {}),
     ...options.capabilities,
@@ -127,6 +130,21 @@ export async function launch(options: LaunchOptions = {}): Promise<Browser> {
 
   await browser.initialize();
   return browser;
+}
+
+/**
+ * The `browserName` capability a given driver will accept.
+ *
+ * safaridriver matches this string against the browser it actually hosts and
+ * rejects the session outright on a mismatch — Technology Preview's driver
+ * reports `Safari Technology Preview`, not `safari`. Deriving it from the
+ * binary path means `safaridriverPath` alone is enough to target the preview
+ * build; callers can still override via `capabilities`.
+ */
+export function browserNameFor(driverBinary: string): string {
+  return driverBinary.includes('Safari Technology Preview')
+    ? 'Safari Technology Preview'
+    : 'safari';
 }
 
 /**

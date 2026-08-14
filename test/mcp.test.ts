@@ -186,15 +186,20 @@ describe('SafariMcp', () => {
 
   it('reads network requests', async () => {
     const mcp = await startMcp();
-    const result = (await mcp.listNetworkRequests()) as { requests: Array<{ url: string }> };
-    assert.equal(result.requests.length, 2);
+    const result = (await mcp.listNetworkRequests()) as {
+      count: number;
+      requests: Array<{ url: string; status: number; mime_type: string }>;
+    };
+    assert.equal(result.count, 2);
     assert.equal(result.requests[0]?.url, 'https://example.com/');
+    assert.equal(result.requests[0]?.status, 200);
+    assert.equal(result.requests[0]?.mime_type, 'text/html');
   });
 
   it('sends snake_case argument names the server actually expects', async () => {
     const mcp = await startMcp();
     // get_network_request requires `request_id`; camelCase would 404 at runtime.
-    const detail = (await mcp.getNetworkRequest('req-1')) as { status: number };
+    const detail = (await mcp.getNetworkRequest('0.28')) as { status: number };
     assert.equal(detail.status, 200);
   });
 
@@ -204,11 +209,31 @@ describe('SafariMcp', () => {
     assert.equal(result.requests.length, 2);
   });
 
-  it('wraps media features in the `media` argument', async () => {
+  it('exposes the tab lifecycle network capture depends on', async () => {
+    // Capture only covers navigations after the tab exists, so these three
+    // have to be reachable for the documented workflow to be followable.
     const mcp = await startMcp();
-    await mcp.setEmulatedMedia({ 'prefers-color-scheme': 'dark' });
+    for (const tool of ['create_tab', 'switch_tab', 'navigate_to_url']) {
+      assert.ok(mcp.has(tool), `missing tool: ${tool}`);
+    }
+  });
+
+  it('sets a media type, which is all the tool accepts', async () => {
+    const mcp = await startMcp();
+    await mcp.setEmulatedMediaType('print');
     const info = (await mcp.callJson('page_info')) as { title: string };
     assert.equal(info.title, 'Fake Page');
+  });
+
+  it('rejects a media *feature* object the way the real server does', async () => {
+    // set_emulated_media takes a CSS media type string only — there is no way
+    // to set prefers-color-scheme, so emulateMediaFeatures() cannot be built
+    // on it. Passing an object must fail loudly rather than appear to work.
+    const mcp = await startMcp();
+    await assert.rejects(
+      () => mcp.call('set_emulated_media', { media: { 'prefers-color-scheme': 'dark' } }),
+      /Missing required 'media'/,
+    );
   });
 
   it('returns base64 image data from screenshot', async () => {

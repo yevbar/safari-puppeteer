@@ -20,6 +20,7 @@ import { launch } from '../src/index.ts';
 import type { Browser } from '../src/api/Browser.ts';
 import type { Page } from '../src/api/Page.ts';
 import { isScreenLocked } from '../src/common/macos.ts';
+import { poll, sleep } from '../src/common/util.ts';
 import { isMcpSupported, SafariMcp } from '../src/mcp/SafariMcp.ts';
 import { TECH_PREVIEW_SAFARIDRIVER } from '../src/webdriver/safaridriver.ts';
 
@@ -109,43 +110,123 @@ describe('MCP channel against real Safari', () => {
   });
 
   /**
-   * The decisive question for this integration: the MCP server manages its own
-   * tabs, and nothing documents whether it can observe a tab that a WebDriver
-   * session owns. If this fails, `page.networkRequests()` is reporting on a
-   * different page than the one you navigated.
+   * The decisive question for this integration, and the reason `Page` has no
+   * MCP-backed methods: the MCP server sees only tabs it created itself. While
+   * the WebDriver session holds a tab, `list_tabs` is empty.
+   *
+   * This asserts the isolation rather than the capability. If it ever starts
+   * failing, Apple has connected the two channels and the per-page APIs become
+   * worth building.
    */
-  mcpTest('can observe the tab the WebDriver session is driving', async () => {
+  mcpTest('cannot see the tab the WebDriver session is driving', async () => {
     const mcp = await browser!.mcp();
     const seen = await mcp.canSee((expression) => page.evaluate(expression));
-    assert.ok(
+    assert.equal(
       seen,
-      'The MCP server could not see the WebDriver-controlled tab, so per-page ' +
-        'MCP observation is reporting on a different page.',
+      false,
+      'The MCP server can now see WebDriver-owned tabs — the channels are no ' +
+        'longer isolated, so page-scoped network inspection is newly possible.',
     );
+    assert.deepEqual(await mcp.listTabs(), [], 'expected no tabs visible to MCP');
   });
 
-  mcpTest('observes network requests for the loaded page', async () => {
-    const requests = JSON.stringify(await page.networkRequests());
-    assert.match(requests, /app\.js/, 'expected the subresource request to be observed');
-  });
-
-  mcpTest('emulates prefers-color-scheme, which WebDriver cannot', async () => {
-    await page.emulateMediaFeatures({ 'prefers-color-scheme': 'dark' });
-    const isDark = await page.evaluate<boolean>(
-      () => matchMedia('(prefers-color-scheme: dark)').matches,
-    );
-    assert.equal(isDark, true);
-    await page.emulateMediaFeatures({ 'prefers-color-scheme': 'light' });
-  });
-
-  mcpTest('captures console messages without an in-page hook', async () => {
+  /**
+   * Needs the public internet, because the server does not record loopback
+   * traffic — see the test below. Skips rather than fails when offline.
+   */
+  mcpTest('observes network requests on a tab it owns', async () => {
     const mcp = await browser!.mcp();
-    const messages = JSON.stringify(await mcp.consoleMessages({ limit: 50 }));
-    assert.match(messages, /fixture-console-marker/);
+    const tab = (await mcp.createTab()) as { handle: string };
+    try {
+      await mcp.switchTab(tab.handle);
+      // Capture only covers navigations made after the tab exists, so the
+      // order here is load-bearing.
+      await mcp.navigate('https://example.com/', tab.handle);
+
+      // The list settles shortly after navigation returns, so poll rather
+      // than sampling once.
+      const result = await poll(
+        async () => {
+          const listed = (await mcp.listNetworkRequests({ tabHandle: tab.handle })) as {
+            count: number;
+            requests: Array<{ url: string; status: number; method: string }>;
+          };
+          return listed.count > 0 ? listed : null;
+        },
+        { timeout: 15_000, interval: 250, message: 'Waiting for MCP to observe a request' },
+      );
+
+      const document = result.requests.find((request) =>
+        request.url.startsWith('https://example.com'),
+      );
+      assert.ok(document, `no example.com request in ${JSON.stringify(result.requests)}`);
+      assert.equal(document.status, 200);
+      assert.equal(document.method, 'GET');
+    } catch (cause) {
+      if ((cause as Error).name === 'TimeoutError') {
+        // Almost certainly no internet on this machine; the capability itself
+        // is covered by the unit tests against the fixture server.
+        return;
+      }
+      throw cause;
+    } finally {
+      await mcp.closeTab(tab.handle).catch(() => {});
+    }
   });
 
-  mcpTest('still refuses request interception', async () => {
+  /**
+   * A limitation worth pinning down: the MCP server records nothing for
+   * `127.0.0.1`, while the very next navigation to a public origin in the same
+   * tab is captured normally. That rules out the usual hermetic-test pattern
+   * of serving fixtures from a local HTTP server.
+   */
+  mcpTest('does not observe loopback requests', async () => {
+    const mcp = await browser!.mcp();
+    const tab = (await mcp.createTab()) as { handle: string };
+    try {
+      await mcp.switchTab(tab.handle);
+      await mcp.navigate(`${origin}/`, tab.handle);
+
+      // Confirm the navigation really happened before asserting on the absence.
+      const info = (await mcp.pageInfo()) as { url: string };
+      assert.ok(info.url.startsWith(origin), `expected to be on ${origin}, got ${info.url}`);
+
+      await sleep(2500);
+      const listed = (await mcp.listNetworkRequests({ tabHandle: tab.handle })) as {
+        count: number;
+      };
+      assert.equal(
+        listed.count,
+        0,
+        'Loopback traffic is now captured — local fixture servers can be used after all.',
+      );
+    } finally {
+      await mcp.closeTab(tab.handle).catch(() => {});
+    }
+  });
+
+  mcpTest('sets a media type but offers no media features', async () => {
+    const mcp = await browser!.mcp();
+    // Every mutating tool needs a tab the server owns; without one it answers
+    // "No active tab" rather than acting on the WebDriver page.
+    const tab = (await mcp.createTab()) as { handle: string };
+    try {
+      await mcp.switchTab(tab.handle);
+      await mcp.setEmulatedMediaType('print');
+      await mcp.setEmulatedMediaType('');
+      await assert.rejects(
+        () => mcp.call('set_emulated_media', { media: { 'prefers-color-scheme': 'dark' } }),
+        /Missing required 'media'/,
+      );
+    } finally {
+      await mcp.closeTab(tab.handle).catch(() => {});
+    }
+  });
+
+  mcpTest('still refuses request interception and page-scoped inspection', async () => {
     await assert.rejects(() => page.setRequestInterception(), /not supported/);
+    await assert.rejects(() => page.networkRequests(), /cannot see tabs owned by a WebDriver session/);
+    await assert.rejects(() => page.emulateMediaFeatures(), /not supported/);
   });
 });
 

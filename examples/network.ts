@@ -1,6 +1,11 @@
 /**
  * Read-only network inspection via the MCP channel.
  *
+ * Note what this example does *not* do: it never inspects traffic for a page
+ * driven with page.goto(). The MCP server is a separate browsing context that
+ * only sees tabs it created itself, so the tab has to come from mcp.createTab()
+ * and the navigation has to happen after that. See the README.
+ *
  * Requires Safari Technology Preview 247+ with remote automation enabled in
  * Technology Preview itself (its settings are separate from Safari's):
  *
@@ -26,26 +31,29 @@ const browser = await launch({
 });
 
 try {
-  const [page] = await browser.pages();
-  if (!page) throw new Error('No page was opened.');
-
-  await page.goto('https://example.com');
-
-  // Observation only — there is no way to block or rewrite these.
-  const requests = await page.networkRequests();
-  console.log('Observed requests:');
-  console.log(JSON.stringify(requests, null, 2));
-
-  // The one mutating capability the MCP channel adds.
-  await page.emulateMediaFeatures({ 'prefers-color-scheme': 'dark' });
-  const isDark = await page.evaluate<boolean>(
-    () => matchMedia('(prefers-color-scheme: dark)').matches,
-  );
-  console.log('prefers-color-scheme: dark ->', isDark);
-
-  // Anything not wrapped is reachable through the raw client.
   const mcp = await browser.mcp();
-  console.log('Tools advertised:', mcp.tools.map((tool) => tool.name).join(', '));
+
+  // The MCP server must own the tab, and capture only covers navigations made
+  // after it exists — so create, switch, *then* navigate.
+  const tab = (await mcp.createTab()) as { handle: string };
+  await mcp.switchTab(tab.handle);
+  await mcp.navigate('https://example.com/', tab.handle);
+
+  // Requests to 127.0.0.1 are never recorded, so a local fixture server would
+  // come back empty here.
+  const observed = await mcp.listNetworkRequests({ tabHandle: tab.handle });
+  console.log('Observed requests:');
+  console.log(JSON.stringify(observed, null, 2));
+
+  await mcp.closeTab(tab.handle);
+
+  // Meanwhile the WebDriver session is a completely separate browser context.
+  const [page] = await browser.pages();
+  if (page) {
+    await page.goto('https://example.com');
+    console.log('WebDriver page title:', await page.title());
+    console.log('Tabs visible to MCP:', JSON.stringify(await mcp.listTabs()));
+  }
 } finally {
   await browser.close();
 }

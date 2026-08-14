@@ -163,10 +163,11 @@ alternative, rather than failing silently or pretending to work:
 |---|---|---|
 | `launch({ headless: true })` | Safari has no headless mode | Move the window off-screen |
 | `page.pdf()` | safaridriver does not implement WebDriver `print` | AppleScript print flow, or render server-side |
-| `page.setRequestInterception()` | No channel can modify traffic: WebDriver has no network layer, MCP only observes, BiDi's `network` module is missing | `page.networkRequests()` to inspect; local proxy to modify |
+| `page.setRequestInterception()` | No channel can modify traffic: WebDriver has no network layer, MCP only observes, BiDi's `network` module is missing | Local proxy |
+| `page.networkRequests()` | MCP cannot see WebDriver-owned tabs | `browser.mcp()` on a tab MCP created |
 | `page.setUserAgent()` | No capability or endpoint exists | Develop → User Agent menu |
 | `page.emulate()` | No CDP Emulation domain | `setViewport`, or a real device/simulator |
-| `page.emulateMediaFeatures()` | Needs the MCP channel | `launch({ mcp: true })` — see [The MCP channel](#the-mcp-channel-optional) |
+| `page.emulateMediaFeatures()` | No CDP Emulation domain; MCP offers media *type* only | Inject CSS with `page.evaluate()` |
 | `page.setOfflineMode()` | No network control | Network Link Conditioner |
 | `page.screenshot({ clip })` | No region-capture command | `elementHandle.screenshot()`, or crop yourself |
 | `page.cookies(...urls)` | Driver only sees the active document | Navigate per origin |
@@ -235,9 +236,20 @@ reasons Safari automation needs a real, unlocked GUI session.
 ## The MCP channel (optional)
 
 Safari Technology Preview 247+ / Safari 27 beta ship `safaridriver --mcp`, an
-official Model Context Protocol server. It is a **second, independent**
-automation channel, and it adds the one thing WebDriver has no answer for:
-read-only visibility into network traffic.
+official Model Context Protocol server. It adds the one thing WebDriver has no
+answer for: read-only visibility into network traffic.
+
+**Read this part before building on it.** The MCP server is not a view onto the
+pages you are driving. It is a *separate browsing context* that sees only tabs
+it created itself. Measured on Technology Preview 249, while a WebDriver session
+holds a tab, `list_tabs` returns `[]` and `page_info` answers `No active tab`.
+
+That is why there is no `page.networkRequests()`: routing it through MCP would
+have reported on a different page than the one you navigated, silently. It
+throws with an explanation instead.
+
+So the working shape is an independent session that you drive with MCP's own
+tab tools:
 
 ```ts
 import { launch, TECH_PREVIEW_SAFARIDRIVER } from 'safari-puppeteer';
@@ -246,15 +258,18 @@ const browser = await launch({
   mcp: true,
   safaridriverPath: TECH_PREVIEW_SAFARIDRIVER,
 });
-const [page] = await browser.pages();
-await page.goto('https://example.com');
 
-const requests = await page.networkRequests();     // read-only inspection
-await page.emulateMediaFeatures({ 'prefers-color-scheme': 'dark' });
+const mcp = await browser.mcp();
+const tab = await mcp.createTab();                  // MCP must own the tab
+await mcp.switchTab(tab.handle);
+await mcp.navigate('https://example.com/', tab.handle);
 
-const mcp = await browser.mcp();                   // full 17-tool escape hatch
-await mcp.consoleMessages({ limit: 50 });
+const { count, requests } = await mcp.listNetworkRequests({ tabHandle: tab.handle });
+// [{ url, method, status, mime_type, response_size_bytes, duration_ms, initiator }]
 ```
+
+Capture only covers navigations made *after* the tab exists, so that ordering
+is load-bearing — navigate first and the list comes back empty.
 
 `mcp: true` reuses whichever `safaridriverPath` you are already driving Safari
 with, because pointing a stable-Safari WebDriver session at a Technology Preview
@@ -278,14 +293,31 @@ and enabling the toggle in one does nothing for the other:
 
 ### What it does and does not add
 
+Measured against Technology Preview 249, not taken from the docs:
+
 | | |
 |---|---|
-| ✅ `page.networkRequests()` | Read-only request list — URL, method, status, type |
-| ✅ `page.networkRequest(id)` | Headers, timing, body for one request |
-| ✅ `page.emulateMediaFeatures()` | The only emulation API that works at all |
-| ✅ `mcp.consoleMessages()` | Server-side console capture, no in-page hook |
-| ✅ `mcp.screenshot({ fullPage })` | Native, not emulated by resizing |
-| ❌ `page.setRequestInterception()` | Still impossible — observation only, no modification |
+| ✅ `mcp.listNetworkRequests()` | Real detail: method, status, MIME type, size, timing, initiator |
+| ✅ `mcp.getNetworkRequest(id)` | Headers and body for one request |
+| ✅ `mcp.screenshot({ fullPage })` | Native, not emulated by resizing the window |
+| ✅ `mcp.pageContent()` | Accessibility tree, event listeners, rects, subframes |
+| ⚠️ `mcp.setEmulatedMediaType()` | Media **type** (`screen`/`print`) only — *not* `prefers-color-scheme` |
+| ❌ `mcp.evaluate()` | Answers `null` for every expression, including `1+1` |
+| ❌ Loopback traffic | Requests to `127.0.0.1` are never recorded |
+| ❌ Observing your Puppeteer page | Separate browsing context, see above |
+| ❌ Request interception | Observation only — no blocking or modification |
+
+Three of these are worth dwelling on, because the docs imply otherwise:
+
+- **`set_emulated_media` is not `emulateMediaFeatures`.** Its schema takes a
+  string — a CSS media *type*. There is no way to set `prefers-color-scheme`,
+  and passing an object fails with `Invalid arguments: Missing required 'media'`.
+- **`evaluate_javascript` is broken** in this preview. It returns `null` for
+  everything. Use `page.evaluate()` over WebDriver.
+- **Local fixture servers are invisible.** Navigating a single tab to
+  `127.0.0.1` records nothing, while the very next navigation to a public
+  origin in that same tab is captured normally. That rules out the usual
+  hermetic-test pattern of serving fixtures locally.
 
 The MCP server is itself backed by WebDriver internally, so it needs the same
 Safari permission — but it only discovers that on the first tool call that

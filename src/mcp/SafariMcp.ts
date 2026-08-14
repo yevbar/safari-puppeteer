@@ -3,13 +3,16 @@
  *
  * Apple shipped this in Safari Technology Preview 247 / Safari 27 beta. It is a
  * *separate* automation channel from the WebDriver session this library
- * normally drives: it speaks MCP, and it manages its own tabs. Whether it can
- * observe a tab that a WebDriver session owns is not documented, so
- * {@link SafariMcp.canSee} answers that empirically rather than assuming it.
+ * normally drives — and, measured on Technology Preview 249, a separate
+ * browsing context as well: it sees only tabs it created itself. While a
+ * WebDriver session holds a tab, `list_tabs` returns `[]` and `page_info`
+ * answers "No active tab". {@link SafariMcp.canSee} checks this empirically so
+ * the assumption is never silent.
  *
- * What it adds over classic WebDriver is read-only *observation*: network
- * requests and console messages. It cannot intercept or modify requests — that
- * needs WebDriver BiDi's `network` module, which Safari does not implement yet.
+ * What it adds over classic WebDriver is read-only *observation* of its own
+ * tabs: network requests in useful detail (method, status, MIME type, size,
+ * timing, initiator). It cannot intercept or modify requests — that needs
+ * WebDriver BiDi's `network` module, which Safari does not implement yet.
  */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -194,6 +197,11 @@ export class SafariMcp {
    * This is the capability classic WebDriver has no equivalent for. It is
    * read-only: there is no interception, blocking, or modification.
    *
+   * Capture is per-tab and only covers navigations that happen *after* the tab
+   * exists, so the working order is `createTab()` → `switchTab()` →
+   * `navigate()` → `listNetworkRequests()`. Requests made before that return
+   * an empty list rather than an error.
+   *
    * `clear` empties the buffer after reading, which is how you scope a
    * capture to one navigation.
    */
@@ -252,7 +260,14 @@ export class SafariMcp {
     return this.callText('get_page_content', options);
   }
 
-  /** Evaluate JavaScript in the MCP server's active tab. */
+  /**
+   * Evaluate JavaScript in the MCP server's active tab.
+   *
+   * **Broken on Safari Technology Preview 249**: the tool answers `null` for
+   * every expression, including `1+1`. Kept because it is part of the server's
+   * advertised surface and should start working, but do not build on it —
+   * `page.evaluate()` over WebDriver is the reliable path.
+   */
   async evaluate(expression: string, frameId?: string): Promise<unknown> {
     return this.callJson('evaluate_javascript', {
       expression,
@@ -261,12 +276,14 @@ export class SafariMcp {
   }
 
   /**
-   * Emulate a media feature, e.g. `{ 'prefers-color-scheme': 'dark' }`.
+   * Emulate a CSS media *type* — `'screen'`, `'print'`, or `''` to clear.
    *
-   * This is the one *mutating* capability worth having: `page.emulate*` has no
-   * WebDriver equivalent at all, so this is strictly additive.
+   * This is Puppeteer's `emulateMediaType()`, not `emulateMediaFeatures()`:
+   * the server takes a plain string and has no way to set features like
+   * `prefers-color-scheme`. Passing an object fails with
+   * `Invalid arguments: Missing required 'media'`.
    */
-  async setEmulatedMedia(media: Record<string, unknown>): Promise<void> {
+  async setEmulatedMediaType(media: string): Promise<void> {
     await this.call('set_emulated_media', { media });
   }
 

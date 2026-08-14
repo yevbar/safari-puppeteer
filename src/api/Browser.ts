@@ -50,6 +50,13 @@ export class Browser extends EventEmitter {
   /**
    * The `safaridriver --mcp` channel, started on first use.
    *
+   * **This is an independent browser session, not a view onto this Browser's
+   * pages.** Measured on Safari Technology Preview 249, the MCP server only
+   * sees tabs it created itself: `list_tabs` returns `[]` while a WebDriver
+   * session holds a tab. Use it for what WebDriver cannot do at all — network
+   * inspection — on tabs you create through `mcp.createTab()`, and treat
+   * anything it reports as belonging to a separate browsing context.
+   *
    * Deliberately lazy: starting it spawns a second driver process, and most
    * scripts never need it.
    */
@@ -185,12 +192,7 @@ export class Browser extends EventEmitter {
   #adopt(handle: string): Page {
     const existing = this.#pages.get(handle);
     if (existing) return existing;
-    const page = new Page(
-      this.#client,
-      handle,
-      this.#safari,
-      this.#mcpBinary === null ? null : () => this.mcp(),
-    );
+    const page = new Page(this.#client, handle, this.#safari);
     this.#pages.set(handle, page);
     return page;
   }

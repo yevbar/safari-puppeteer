@@ -46,7 +46,7 @@ const TOOLS = [
   { name: 'page_info', inputSchema: { type: 'object', properties: {}, required: [] } },
   { name: 'page_interactions', inputSchema: { type: 'object', properties: { fullText: {}, interactions: {} }, required: ['interactions'] } },
   { name: 'screenshot', inputSchema: { type: 'object', properties: { full_page: {}, node: {}, savePath: {} }, required: [] } },
-  { name: 'set_emulated_media', inputSchema: { type: 'object', properties: { media: {} }, required: ['media'] } },
+  { name: 'set_emulated_media', inputSchema: { type: 'object', properties: { media: { type: 'string', description: 'CSS media type to emulate, e.g. "screen" or "print". Empty string clears the override.' } }, required: ['media'] } },
   { name: 'set_viewport_size', inputSchema: { type: 'object', properties: { height: {}, width: {} }, required: ['width', 'height'] } },
   { name: 'switch_tab', inputSchema: { type: 'object', properties: { handle: {} }, required: ['handle'] } },
   { name: 'wait_for_navigation', inputSchema: { type: 'object', properties: { timeout_seconds: {} }, required: [] } },
@@ -91,19 +91,25 @@ function callTool(name, args) {
       return text({ expression });
     }
     case 'list_network_requests':
+      // Shape copied from a live STP 249 response.
       return text({
+        count: 2,
         requests: [
-          { request_id: 'req-1', url: 'https://example.com/', method: 'GET', status: 200, type: 'document' },
-          { request_id: 'req-2', url: 'https://example.com/app.js', method: 'GET', status: 200, type: 'script' },
+          { request_id: '0.28', url: 'https://example.com/', method: 'GET', status: 200, mime_type: 'text/html', response_size_bytes: 559, duration_ms: 0, initiator: { type: 'other' } },
+          { request_id: '0.76', url: 'https://example.com/app.js', method: 'GET', status: 200, mime_type: 'text/javascript', response_size_bytes: 31, duration_ms: 0, initiator: { type: 'parser' } },
         ],
       });
     case 'get_network_request':
-      return args.request_id === 'req-1'
-        ? text({ request_id: 'req-1', url: 'https://example.com/', requestHeaders: { accept: '*/*' }, status: 200 })
+      return args.request_id === '0.28'
+        ? text({ request_id: '0.28', url: 'https://example.com/', requestHeaders: { accept: '*/*' }, status: 200 })
         : toolError(`No request with id ${args.request_id}`);
     case 'browser_console_messages':
       return text({ messages: [{ level: 'log', text: 'hello', url: 'https://example.com/' }] });
     case 'set_emulated_media':
+      // The real tool takes a CSS media *type* string, not a feature object.
+      if (typeof args.media !== 'string') {
+        return toolError("Invalid arguments: Missing required 'media'");
+      }
       state.emulatedMedia = args.media;
       return text('ok');
     case 'screenshot':
