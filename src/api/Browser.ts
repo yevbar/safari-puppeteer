@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { SafariApp } from '../applescript/safari.ts';
 import { McpError, SafariPuppeteerError } from '../common/errors.ts';
 import { SafariMcp } from '../mcp/SafariMcp.ts';
+import { WebDriverBackend } from '../backend/WebDriverBackend.ts';
 import type { WebDriverClient } from '../webdriver/client.ts';
 import type { SafariDriverProcess } from '../webdriver/safaridriver.ts';
 import { Page, type Viewport } from './Page.ts';
@@ -192,7 +193,7 @@ export class Browser extends EventEmitter {
   #adopt(handle: string): Page {
     const existing = this.#pages.get(handle);
     if (existing) return existing;
-    const page = new Page(this.#client, handle, this.#safari);
+    const page = new Page(new WebDriverBackend(this.#client, handle), handle, this.#safari);
     this.#pages.set(handle, page);
     return page;
   }
