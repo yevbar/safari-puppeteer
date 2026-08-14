@@ -264,6 +264,21 @@ describe('SafariMcp', () => {
   });
 });
 
+describe('evaluate semantics', () => {
+  it('wraps an expression in the return the tool requires', async () => {
+    // The tool treats its input as a function body: a bare expression
+    // evaluates and is discarded, answering null.
+    const mcp = await startMcp();
+    assert.equal(await mcp.evaluateBody('document.title'), null);
+    assert.equal(await mcp.evaluate('document.title'), 'Fake Page');
+  });
+
+  it('passes a raw body through untouched', async () => {
+    const mcp = await startMcp();
+    assert.equal(await mcp.evaluateBody('return document.title;'), 'Fake Page');
+  });
+});
+
 describe('attach probe', () => {
   it('reports true when the marker shows up in list_tabs', async () => {
     const mcp = await startMcp();

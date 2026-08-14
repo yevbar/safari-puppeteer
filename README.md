@@ -302,7 +302,7 @@ Measured against Technology Preview 249, not taken from the docs:
 | ✅ `mcp.screenshot({ fullPage })` | Native, not emulated by resizing the window |
 | ✅ `mcp.pageContent()` | Accessibility tree, event listeners, rects, subframes |
 | ⚠️ `mcp.setEmulatedMediaType()` | Media **type** (`screen`/`print`) only — *not* `prefers-color-scheme` |
-| ❌ `mcp.evaluate()` | Answers `null` for every expression, including `1+1` |
+| ✅ `mcp.evaluate()` | Works — but the tool's input is a *function body*, not an expression |
 | ❌ Loopback traffic | Requests to `127.0.0.1` are never recorded |
 | ❌ Observing your Puppeteer page | Separate browsing context, see above |
 | ❌ Request interception | Observation only — no blocking or modification |
@@ -312,8 +312,10 @@ Three of these are worth dwelling on, because the docs imply otherwise:
 - **`set_emulated_media` is not `emulateMediaFeatures`.** Its schema takes a
   string — a CSS media *type*. There is no way to set `prefers-color-scheme`,
   and passing an object fails with `Invalid arguments: Missing required 'media'`.
-- **`evaluate_javascript` is broken** in this preview. It returns `null` for
-  everything. Use `page.evaluate()` over WebDriver.
+- **`evaluate_javascript` takes a function body, not an expression.** Sending
+  `1+1` evaluates and discards, answering `null`; `return 1+1` gives `2`. Our
+  `mcp.evaluate()` adds the `return` for you, and `mcp.evaluateBody()` passes
+  statements through untouched.
 - **Local fixture servers are invisible.** Navigating a single tab to
   `127.0.0.1` records nothing, while the very next navigation to a public
   origin in that same tab is captured normally. That rules out the usual

@@ -37,7 +37,7 @@ const TOOLS = [
   { name: 'browser_dialogs', inputSchema: { type: 'object', properties: { action: {}, inputText: {} }, required: ['action'] } },
   { name: 'close_tab', inputSchema: { type: 'object', properties: { handle: {} }, required: ['handle'] } },
   { name: 'create_tab', inputSchema: { type: 'object', properties: { url: {} }, required: [] } },
-  { name: 'evaluate_javascript', inputSchema: { type: 'object', properties: { expression: {}, frameId: {} }, required: ['expression'] } },
+  { name: 'evaluate_javascript', inputSchema: { type: 'object', properties: { expression: { type: 'string', description: 'JavaScript code to evaluate, treated as a function body. Use an explicit `return` for a value.' }, frameId: {} }, required: ['expression'] } },
   { name: 'get_network_request', inputSchema: { type: 'object', properties: { request_id: {} }, required: ['request_id'] } },
   { name: 'get_page_content', inputSchema: { type: 'object', properties: { format: {} }, required: [] } },
   { name: 'list_network_requests', inputSchema: { type: 'object', properties: { clear: {}, filter: {}, since: {}, tab_handle: {} }, required: [] } },
@@ -80,8 +80,11 @@ function callTool(name, args) {
     case 'page_info':
       return text({ title: state.title, url: 'https://example.com/' });
     case 'evaluate_javascript': {
-      // Enough of an evaluator to drive the attach probe end to end.
+      // Enough of an evaluator to drive the attach probe end to end. Like the
+      // real tool, the input is a function body: without an explicit `return`
+      // the result is null.
       const expression = String(args.expression ?? '');
+      if (!/\breturn\b/.test(expression)) return text(null);
       const assignment = /document\.title\s*=\s*("(?:[^"\\]|\\.)*")/.exec(expression);
       const previous = state.title;
       if (assignment) state.title = JSON.parse(assignment[1]);

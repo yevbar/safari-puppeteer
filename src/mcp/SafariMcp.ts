@@ -13,6 +13,9 @@
  * tabs: network requests in useful detail (method, status, MIME type, size,
  * timing, initiator). It cannot intercept or modify requests — that needs
  * WebDriver BiDi's `network` module, which Safari does not implement yet.
+ *
+ * Its element model is also different: nodes are addressed by UID from
+ * {@link SafariMcp.pageContent}, not by CSS selector or element reference.
  */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -261,16 +264,27 @@ export class SafariMcp {
   }
 
   /**
-   * Evaluate JavaScript in the MCP server's active tab.
+   * Evaluate an expression in the MCP server's active tab and return its value.
    *
-   * **Broken on Safari Technology Preview 249**: the tool answers `null` for
-   * every expression, including `1+1`. Kept because it is part of the server's
-   * advertised surface and should start working, but do not build on it —
-   * `page.evaluate()` over WebDriver is the reliable path.
+   * The tool treats its input as a *function body*, not an expression: bare
+   * `1+1` evaluates and discards, answering `null`. That is a genuinely easy
+   * mistake to make, so this wraps the input in an explicit `return` and
+   * {@link SafariMcp.evaluateBody} takes raw bodies for multi-statement code.
+   *
+   * `frameId` is a UID from {@link SafariMcp.pageContent}, not a WebDriver
+   * frame reference.
    */
   async evaluate(expression: string, frameId?: string): Promise<unknown> {
+    return this.evaluateBody(`return (${expression});`, frameId);
+  }
+
+  /**
+   * Evaluate a function body verbatim — use when you need statements, or the
+   * server's `$uid(N)` macros for referring to nodes from `pageContent()`.
+   */
+  async evaluateBody(body: string, frameId?: string): Promise<unknown> {
     return this.callJson('evaluate_javascript', {
-      expression,
+      expression: body,
       ...(frameId === undefined ? {} : { frameId }),
     });
   }

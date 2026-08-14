@@ -205,6 +205,25 @@ describe('MCP channel against real Safari', () => {
     }
   });
 
+  mcpTest('evaluates JavaScript when the input is a function body', async () => {
+    const mcp = await browser!.mcp();
+    const tab = (await mcp.createTab()) as { handle: string };
+    try {
+      await mcp.switchTab(tab.handle);
+      await mcp.navigate('https://example.com/', tab.handle);
+
+      // The tool's input is a function body, so a bare expression evaluates
+      // and is discarded. evaluate() adds the return; evaluateBody() does not.
+      assert.equal(await mcp.evaluateBody('1 + 1'), null);
+      assert.equal(await mcp.evaluate('1 + 1'), 2);
+      assert.equal(await mcp.evaluateBody('return 1 + 1;'), 2);
+      assert.equal(await mcp.evaluate('document.title'), 'Example Domain');
+      assert.deepEqual(await mcp.evaluate('({ a: 1, b: [2, 3] })'), { a: 1, b: [2, 3] });
+    } finally {
+      await mcp.closeTab(tab.handle).catch(() => {});
+    }
+  });
+
   mcpTest('sets a media type but offers no media features', async () => {
     const mcp = await browser!.mcp();
     // Every mutating tool needs a tab the server owns; without one it answers
