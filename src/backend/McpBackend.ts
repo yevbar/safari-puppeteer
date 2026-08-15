@@ -173,11 +173,34 @@ export class McpBackend implements PageBackend {
     );
   }
 
+  /**
+   * Typed one key at a time, which is slow but produces real key events.
+   *
+   * The server's `type` interaction cannot be used: it requires a node
+   * identifier from `get_page_content`, and the `$uid(N)` macro that would map
+   * a selector onto one is not implemented in Technology Preview 249
+   * (`Can't find variable: $`). Point-addressed `type` fails with
+   * "Missing nodeIdentifier" — and does so *successfully*, which is why
+   * {@link SafariMcp.interact} now checks the step count.
+   *
+   * `keyPress` accepts a point-focused target, so it is the only route that
+   * dispatches genuine `keydown`/`keypress`. Setting `value` in-page would be
+   * instant but silent — no key events at all — which breaks anything with a
+   * keystroke handler.
+   *
+   * Budget roughly 0.4s per character: the server settles between steps. For
+   * long strings, `page.evaluate()` is far faster if you do not need the
+   * events.
+   */
   async type(selector: string, text: string): Promise<void> {
     const point = await this.#centerOf(selector);
     await this.#mcp.interact([
       { type: 'click', point, purpose: `Focus ${selector}` },
-      { type: 'type', point, value: text, purpose: `Type into ${selector}` },
+      ...Array.from(text, (character) => ({
+        type: 'keyPress',
+        value: character,
+        purpose: `Type ${JSON.stringify(character)}`,
+      })),
     ]);
   }
 

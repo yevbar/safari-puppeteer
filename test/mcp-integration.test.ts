@@ -31,6 +31,20 @@ const FIXTURE = `<!doctype html>
 <script src="/app.js"></script>
 <script>console.log('fixture-console-marker');</script>`;
 
+/** Records keydown, so a test can tell real keystrokes from an assigned value. */
+const INPUT_FIXTURE = `<!doctype html>
+<meta charset="utf-8">
+<title>Input Fixture</title>
+<input id="text" value="">
+<p id="keys"></p>
+<button id="btn" onclick="document.getElementById('out').textContent='clicked'">Click</button>
+<p id="out"></p>
+<script>
+  document.getElementById('text').addEventListener('keydown', (event) => {
+    document.getElementById('keys').textContent += event.key;
+  });
+</script>`;
+
 let server: Server;
 let origin: string;
 let browser: Browser | null = null;
@@ -45,7 +59,7 @@ before(async () => {
       return;
     }
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(FIXTURE);
+    res.end(req.url === '/keys' ? INPUT_FIXTURE : FIXTURE);
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
@@ -385,6 +399,38 @@ describe('MCP backend against real Safari', () => {
     assert.equal(await mcpPage.evaluate(() => matchMedia('print').matches), true);
     await mcpPage.emulateMediaType('');
     assert.equal(await mcpPage.evaluate(() => matchMedia('screen').matches), true);
+  });
+
+  /**
+   * Typing is the fragile part of this backend. The server's `type` interaction
+   * needs a node identifier we cannot obtain, so this goes key by key — and a
+   * failed interaction is reported inside a *successful* response, which is how
+   * it silently did nothing before.
+   */
+  backendTest('types real key events, not just a value', async () => {
+    await mcpPage.goto(`${origin}/keys`);
+    await mcpPage.type('#text', 'hey');
+
+    assert.equal(await mcpPage.$eval('#text', (el: HTMLInputElement) => el.value), 'hey');
+    // Proves the keystrokes were dispatched rather than the value assigned.
+    assert.equal(await mcpPage.$eval('#keys', (el: Element) => el.textContent), 'hey');
+  });
+
+  backendTest('surfaces a failed interaction instead of reporting success', async () => {
+    await mcpPage.goto(`${origin}/keys`);
+    // A node identifier is required for `type`, and none can be supplied, so
+    // the server answers 0-of-1 successful. That must not read as success.
+    const mcp = (mcpPage.backend as { mcp: SafariMcp }).mcp;
+    await assert.rejects(
+      () => mcp.interact([{ type: 'type', value: 'x', purpose: 'should fail' }]),
+      /Only 0 of 1 interactions succeeded/,
+    );
+  });
+
+  backendTest('clicks and reflects the result', async () => {
+    await mcpPage.goto(`${origin}/keys`);
+    await mcpPage.click('#btn');
+    assert.equal(await mcpPage.$eval('#out', (el: Element) => el.textContent), 'clicked');
   });
 
   backendTest('drives selector-level input', async () => {

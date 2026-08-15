@@ -346,12 +346,32 @@ export class SafariMcp {
     );
   }
 
-  /** Drive the documented interaction batch (click, type, scroll, hover). */
+  /**
+   * Drive the documented interaction batch (click, keyPress, scroll, hover).
+   *
+   * Failures are *not* reported as tool errors: the server answers successfully
+   * with `successful` below `requested` and a `failureReason` in the body. Left
+   * unchecked that turns a click that never landed into a silent no-op, so this
+   * raises it.
+   *
+   * Steps settle ~400 ms apart, so a batch is roughly `0.4s × steps`.
+   */
   async interact(interactions: unknown[], fullText?: boolean): Promise<unknown> {
-    return this.callJson('page_interactions', {
+    const result = (await this.callJson('page_interactions', {
       interactions,
       ...(fullText === undefined ? {} : { fullText }),
-    });
+    })) as { successful?: number; requested?: number; failureReason?: string };
+
+    const requested = result?.requested ?? interactions.length;
+    const successful = result?.successful ?? requested;
+    if (successful < requested) {
+      throw new McpError(
+        `Only ${successful} of ${requested} interactions succeeded` +
+          (result?.failureReason ? `: ${result.failureReason}` : '.'),
+        { tool: 'page_interactions' },
+      );
+    }
+    return result;
   }
 
   /**

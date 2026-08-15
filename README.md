@@ -300,13 +300,22 @@ await page.emulateMediaType('print');
 | `page.cookies()` and friends | ✅ | ❌ no cookie tool |
 | `enterFrame`, `$x`, `windowRect` | ✅ | ❌ |
 | `page.keyboard` / `page.mouse` | ✅ W3C Actions | ❌ selector-level input only |
-| Input speed | fast | ~400 ms settle per interaction |
+| `page.click`, `hover`, `select` | ✅ | ✅ |
+| `page.type` | ✅ fast | ✅ real key events, but **~0.4 s per character** |
 
 Anything a backend cannot do throws `UnsupportedOperationError` naming the
 backend and the alternative, so a script that outgrows the MCP backend says so
 rather than misbehaving.
 
-Two behaviours of the MCP backend are worth knowing:
+Three behaviours of the MCP backend are worth knowing:
+
+- **`page.type()` costs about 0.4 s per character.** The server's own `type`
+  interaction needs a node identifier from `get_page_content`, and the
+  `$uid(N)` macro that would map a selector onto one is not implemented in
+  Technology Preview 249, so typing goes key by key. That is slower but real:
+  the page sees genuine `keydown`/`keypress`, which assigning `value` in-page
+  would not produce. For long strings where you do not need the events,
+  `page.evaluate()` is far faster.
 
 - **Recording must start before the traffic.** The first `list_network_requests`
   call arms capture and returns nothing. The backend arms it before your first
