@@ -23,6 +23,25 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const scratch = mkdtempSync(join(tmpdir(), 'safari-puppeteer-pack-'));
 let failures = 0;
 
+/**
+ * Environment for the nested npm calls.
+ *
+ * npm exports its own config into lifecycle scripts, so running this from
+ * `prepublishOnly` under `npm publish --dry-run` sets npm_config_dry_run=true
+ * — which the nested `npm install` inherits and quietly turns into a no-op,
+ * leaving nothing to import. Stripping those keys makes this behave the same
+ * whether it is run by hand or by the publish lifecycle.
+ */
+function npmEnv() {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('npm_config_dry_run') || key.startsWith('npm_lifecycle_')) {
+      delete env[key];
+    }
+  }
+  return env;
+}
+
 function check(name, fn) {
   try {
     fn();
@@ -39,6 +58,7 @@ try {
     cwd: root,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'inherit'],
+    env: npmEnv(),
   });
   const [meta] = JSON.parse(packJson);
   const tarball = join(scratch, meta.filename);
@@ -102,6 +122,7 @@ try {
   execFileSync('npm', ['install', '--silent', '--no-audit', '--no-fund', tarball], {
     cwd: consumer,
     stdio: ['ignore', 'ignore', 'inherit'],
+    env: npmEnv(),
   });
 
   const entry = join(consumer, 'node_modules', 'safari-puppeteer', 'dist', 'index.js');
@@ -138,7 +159,7 @@ try {
     const byName = execFileSync(
       process.execPath,
       ['-e', "import('safari-puppeteer').then(m => console.log(typeof m.launch))"],
-      { cwd: consumer, encoding: 'utf8' },
+      { cwd: consumer, encoding: 'utf8', env: npmEnv() },
     );
     assert.equal(byName.trim(), 'function');
   });
