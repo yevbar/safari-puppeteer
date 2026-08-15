@@ -55,6 +55,11 @@ your Mac, with its real engine, codecs, and quirks. That is the point — and it
 is also why some Puppeteer APIs cannot exist here (see
 [Unsupported](#unsupported-apis)).
 
+Everything above works on stable Safari. **Network inspection is the one
+exception: it requires Safari Technology Preview 247+**, because it depends on
+`safaridriver --mcp`, which stable Safari does not ship. See
+[Backends](#backends).
+
 ## Setup
 
 Run the doctor first. It checks every prerequisite and prints the exact fix for
@@ -165,7 +170,7 @@ alternative, rather than failing silently or pretending to work:
 | `launch({ headless: true })` | Safari has no headless mode | Move the window off-screen |
 | `page.pdf()` | safaridriver does not implement WebDriver `print` | AppleScript print flow, or render server-side |
 | `page.setRequestInterception()` | No channel can modify traffic: WebDriver has no network layer, MCP only observes, BiDi's `network` module is missing | Local proxy |
-| `page.networkRequests()` | The WebDriver backend has no network layer | `launch({ backend: 'mcp' })` |
+| `page.networkRequests()` | The WebDriver backend has no network layer | `launch({ backend: 'mcp' })` — **needs Safari Technology Preview 247+** |
 | `page.setUserAgent()` | No capability or endpoint exists | Develop → User Agent menu |
 | `page.emulate()` | No CDP Emulation domain | `setViewport`, or a real device/simulator |
 | `page.emulateMediaFeatures()` | No CDP Emulation domain; MCP offers media *type* only | Inject CSS with `page.evaluate()` |
@@ -204,8 +209,11 @@ Worth reading before you debug something surprising:
 - **One session at a time.** safaridriver serves a single session per instance;
   `browser.newPage()` opens tabs multiplexed over that one session by switching
   window handles.
-- **`uploadFile` is best-effort.** Safari's support for the spec's file-input
-  behaviour is historically inconsistent — verify on your version.
+- **`uploadFile` goes through "send keys to a file input"**, since WebDriver has
+  no upload command. Verified working on Safari 26.6 for single and multiple
+  files, including the `change` event and the file's contents being readable
+  in-page. Safari's support here has been inconsistent historically, so the
+  integration suite asserts it rather than assuming it.
 - **`isVisible()` is computed in-page.** safaridriver does not implement
   WebDriver's `/element/{id}/displayed` endpoint — it answers `unknown
   command` — so visibility is evaluated with `checkVisibility()` plus a
@@ -235,6 +243,21 @@ CI runner has the same problem for the same reason — that is one of several
 reasons Safari automation needs a real, unlocked GUI session.
 
 ## Backends
+
+> ### ⚠️ Network inspection requires Safari Technology Preview
+>
+> `page.networkRequests()` and everything else in this section depend on
+> `safaridriver --mcp`, which ships **only in Safari Technology Preview 247+ /
+> Safari 27 beta**. It does not exist in stable Safari (26.6 included) — its
+> `safaridriver` has no `--mcp` flag at all.
+>
+> On a stable Safari the default backend is your only option, and network
+> traffic is not observable through any Safari automation channel. If you cannot
+> install a preview build, use a local proxy instead.
+>
+> Install: `brew install --cask safari-technology-preview` — then see
+> [Setup for the MCP backend](#setup-for-the-mcp-backend). Run `npm run doctor`
+> to check.
 
 Pages are driven by a **backend**. There are two, and they are not equally
 capable — which is why the choice is explicit and the default is conservative.
@@ -384,8 +407,14 @@ npm publish     # publishConfig.access is already set to public
 ## Requirements
 
 macOS with Safari. Node 18+. Tested against Safari 18.6 on macOS 15.6 and
-Safari 26.6 on macOS 26.6. The optional MCP channel additionally needs Safari
-Technology Preview 247+ (verified against Release 249).
+Safari 26.6 on macOS 26.6.
+
+**The MCP backend and all network inspection additionally require Safari
+Technology Preview 247+** (verified against Release 249). `safaridriver --mcp`
+does not exist in stable Safari, so on a stable-only machine
+`launch({ backend: 'mcp' })` throws at startup with install instructions, and
+`page.networkRequests()` is unavailable. Everything else in this README works on
+stable Safari.
 
 ## License
 

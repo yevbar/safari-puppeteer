@@ -458,9 +458,11 @@ export class ElementHandle extends JSHandle {
   /**
    * Set the files of an `<input type="file">`.
    *
-   * Implemented via the spec's "send keys to a file input" behaviour, which
-   * safaridriver's support for is historically inconsistent — verify against
-   * your Safari version before relying on it.
+   * Implemented via the spec's "send keys to a file input" behaviour, since
+   * WebDriver has no upload command. safaridriver's support for this has been
+   * inconsistent historically; verified working on Safari 26.6 for single and
+   * multiple files, with the `change` event firing and the contents readable
+   * in-page. The integration suite asserts all of that.
    */
   async uploadFile(...filePaths: string[]): Promise<void> {
     const tag = (await this.tagName()).toLowerCase();

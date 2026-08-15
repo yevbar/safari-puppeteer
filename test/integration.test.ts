@@ -9,7 +9,10 @@
  * Run: node --test --experimental-strip-types test/integration.test.ts
  */
 import assert from 'node:assert/strict';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { launch } from '../src/index.ts';
@@ -32,6 +35,8 @@ const FIXTURE = `<!doctype html>
   <option value="y">Y</option>
   <option value="z">Z</option>
 </select>
+<input id="file" type="file">
+<input id="files" type="file" multiple>
 <button id="btn" onclick="document.getElementById('out').textContent='clicked'">Click</button>
 <p id="out"></p>
 <div id="tall" style="height: 3000px"></div>
@@ -371,5 +376,112 @@ describe('unsupported operations fail loudly', () => {
       () => page.setRequestInterception(),
       /WebDriver BiDi/,
     );
+  });
+});
+
+
+/**
+ * File upload.
+ *
+ * WebDriver has no upload command: the spec routes it through "send keys to a
+ * file input", and safaridriver's support for that has been inconsistent
+ * enough historically that it is worth asserting rather than assuming. If
+ * these fail on some future Safari, the README claim needs to change with them.
+ */
+describe('file upload', () => {
+  let uploadDir: string;
+  let alpha: string;
+  let beta: string;
+
+  before(async () => {
+    uploadDir = await mkdtemp(join(tmpdir(), 'safari-puppeteer-upload-'));
+    alpha = join(uploadDir, 'alpha.txt');
+    beta = join(uploadDir, 'beta.txt');
+    await writeFile(alpha, 'alpha contents');
+    await writeFile(beta, 'beta');
+  });
+
+  after(async () => {
+    await rm(uploadDir, { recursive: true, force: true });
+  });
+
+  safariTest('sets a single file on an input', async () => {
+    await page.goto(origin, { waitUntil: 'load' });
+    const input = await page.$('#file');
+    assert.ok(input);
+    await input.uploadFile(alpha);
+
+    const files = await page.$eval('#file', (element: HTMLInputElement) =>
+      Array.from(element.files ?? []).map((file) => ({ name: file.name, size: file.size })),
+    );
+    assert.deepEqual(files, [{ name: 'alpha.txt', size: 'alpha contents'.length }]);
+  });
+
+  safariTest('sets several files on a multiple input', async () => {
+    await page.goto(origin, { waitUntil: 'load' });
+    const input = await page.$('#files');
+    assert.ok(input);
+    // The spec joins paths with a newline; this is the case most likely to
+    // differ between drivers.
+    await input.uploadFile(alpha, beta);
+
+    const names = await page.$eval('#files', (element: HTMLInputElement) =>
+      Array.from(element.files ?? []).map((file) => file.name),
+    );
+    assert.deepEqual(names.sort(), ['alpha.txt', 'beta.txt']);
+  });
+
+  safariTest('makes the file readable by the page', async () => {
+    // Proves a real file was attached, not just a name.
+    await page.goto(origin, { waitUntil: 'load' });
+    const input = await page.$('#file');
+    assert.ok(input);
+    await input.uploadFile(alpha);
+
+    const text = await page.evaluate(async () => {
+      const element = document.querySelector('#file') as HTMLInputElement;
+      const file = element.files?.[0];
+      return file ? await file.text() : null;
+    });
+    assert.equal(text, 'alpha contents');
+  });
+
+  safariTest('fires a change event, as a real selection would', async () => {
+    await page.goto(origin, { waitUntil: 'load' });
+    await page.evaluate(() => {
+      (window as unknown as Record<string, unknown>).__changed = 0;
+      document.querySelector('#file')?.addEventListener('change', () => {
+        (window as unknown as Record<string, number>).__changed++;
+      });
+    });
+
+    const input = await page.$('#file');
+    assert.ok(input);
+    await input.uploadFile(alpha);
+
+    assert.equal(
+      await page.evaluate(() => (window as unknown as Record<string, number>).__changed),
+      1,
+    );
+  });
+
+  safariTest('refuses an element that is not a file input', async () => {
+    await page.goto(origin, { waitUntil: 'load' });
+    const notAFile = await page.$('#text');
+    assert.ok(notAFile);
+    await assert.rejects(() => notAFile.uploadFile(alpha), /requires an <input type="file"> element/);
+  });
+
+  safariTest('reports a missing file rather than attaching nothing', async () => {
+    await page.goto(origin, { waitUntil: 'load' });
+    const input = await page.$('#file');
+    assert.ok(input);
+
+    // Either the driver rejects the path, or nothing is attached. Silently
+    // attaching a phantom file would be the bad outcome.
+    const missing = join(uploadDir, 'does-not-exist.txt');
+    await input.uploadFile(missing).catch(() => {});
+    const count = await page.$eval('#file', (element: HTMLInputElement) => element.files?.length ?? 0);
+    assert.equal(count, 0);
   });
 });
