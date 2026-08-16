@@ -42,18 +42,6 @@ export interface LaunchOptions {
   /** ms to wait for safaridriver to become ready. */
   timeout?: number;
   /**
-   * Also start `safaridriver --mcp`, making {@link Browser.mcp} available for
-   * network inspection.
-   *
-   * Note that the MCP server is an independent browsing context: it observes
-   * only tabs it created itself, not the pages this Browser drives.
-   *
-   * Requires Safari Technology Preview 247+ / Safari 27 beta; launch throws
-   * with install instructions if the driver does not support it. Pass a string
-   * to use a different binary for the MCP channel than for WebDriver.
-   */
-  mcp?: boolean | string;
-  /**
    * Which automation channel drives pages.
    *
    * `'webdriver'` (the default) is the only one that works on a stable Safari.
@@ -68,8 +56,6 @@ export interface LaunchOptions {
 export interface ConnectOptions {
   /** Base URL of an already-running safaridriver, e.g. http://127.0.0.1:4444. */
   driverUrl: string;
-  /** Start `safaridriver --mcp` alongside. Pass a path to pick the binary. */
-  mcp?: boolean | string;
   /** Attach to this existing session instead of creating one. */
   sessionId?: string;
   defaultViewport?: Viewport | null;
@@ -96,10 +82,6 @@ export async function launch(options: LaunchOptions = {}): Promise<Browser> {
 
   const driverBinary = options.safaridriverPath ?? DEFAULT_SAFARIDRIVER;
   const backend = options.backend ?? 'webdriver';
-
-  // Resolved before spawning anything, so an unsupported driver fails fast with
-  // install instructions rather than after a browser window has appeared.
-  const mcpBinary = await resolveMcpBinary(options.mcp, driverBinary);
 
   if (backend === 'mcp') {
     return launchMcpBackend(options, driverBinary);
@@ -141,7 +123,6 @@ export async function launch(options: LaunchOptions = {}): Promise<Browser> {
     safari: new SafariApp({ appName: options.appName }),
     defaultViewport: options.defaultViewport === undefined ? null : options.defaultViewport,
     capabilities: created.capabilities,
-    mcpBinary,
   });
 
   await browser.initialize();
@@ -201,30 +182,6 @@ export function browserNameFor(driverBinary: string): string {
     : 'safari';
 }
 
-/**
- * Decide which binary should serve the MCP channel, and verify it can.
- *
- * `mcp: true` means "use the same driver I am already driving Safari with",
- * because mixing a stable-Safari WebDriver session with a Technology Preview
- * MCP server would observe a different browser entirely.
- */
-async function resolveMcpBinary(
-  mcp: boolean | string | undefined,
-  driverBinary: string,
-): Promise<string | null> {
-  if (mcp === undefined || mcp === false) return null;
-
-  const binary = typeof mcp === 'string' ? mcp : driverBinary;
-  const { isMcpSupported, MCP_UNAVAILABLE_HINT } = await import('./mcp/SafariMcp.ts');
-
-  if (!(await isMcpSupported(binary))) {
-    throw new McpError(
-      `${binary} does not support --mcp, so launch({ mcp: true }) cannot work.\n\n` +
-        MCP_UNAVAILABLE_HINT,
-    );
-  }
-  return binary;
-}
 
 /**
  * Connect to a safaridriver you started yourself.
@@ -234,7 +191,6 @@ async function resolveMcpBinary(
  */
 export async function connect(options: ConnectOptions): Promise<Browser> {
   const client = new WebDriverClient(options.driverUrl);
-  const mcpBinary = await resolveMcpBinary(options.mcp, DEFAULT_SAFARIDRIVER);
 
   let capabilities: Record<string, unknown> = {};
   if (options.sessionId) {
@@ -257,7 +213,6 @@ export async function connect(options: ConnectOptions): Promise<Browser> {
     safari: new SafariApp({ appName: options.appName }),
     defaultViewport: options.defaultViewport === undefined ? null : options.defaultViewport,
     capabilities,
-    mcpBinary,
   });
 
   await browser.initialize();

@@ -1,8 +1,7 @@
 import { EventEmitter } from 'node:events';
 
 import { SafariApp } from '../applescript/safari.ts';
-import { McpError, SafariPuppeteerError } from '../common/errors.ts';
-import { SafariMcp } from '../mcp/SafariMcp.ts';
+import { SafariPuppeteerError } from '../common/errors.ts';
 import type { BackendName, BrowserSession } from '../backend/types.ts';
 import { WebDriverSession } from '../backend/sessions.ts';
 import type { WebDriverClient } from '../webdriver/client.ts';
@@ -23,66 +22,20 @@ export class Browser extends EventEmitter {
   #capabilities: Record<string, unknown>;
   #closed = false;
 
-  /** Set when the caller asked for the MCP channel. */
-  #mcpBinary: string | null;
-  #mcp: SafariMcp | null = null;
-  /** In-flight start, so concurrent `mcp()` calls share one server. */
-  #mcpStarting: Promise<SafariMcp> | null = null;
 
   constructor(options: {
     session: BrowserSession;
     safari: SafariApp;
     defaultViewport?: Viewport | null;
     capabilities?: Record<string, unknown>;
-    /** safaridriver to run with `--mcp`. Null disables the side MCP channel. */
-    mcpBinary?: string | null;
   }) {
     super();
     this.#session = options.session;
     this.#safari = options.safari;
     this.#defaultViewport = options.defaultViewport ?? null;
     this.#capabilities = options.capabilities ?? {};
-    this.#mcpBinary = options.mcpBinary ?? null;
   }
 
-  /**
-   * The `safaridriver --mcp` channel, started on first use.
-   *
-   * **This is an independent browser session, not a view onto this Browser's
-   * pages.** Measured on Safari Technology Preview 249, the MCP server only
-   * sees tabs it created itself: `list_tabs` returns `[]` while a WebDriver
-   * session holds a tab. Use it for what WebDriver cannot do at all — network
-   * inspection — on tabs you create through `mcp.createTab()`, and treat
-   * anything it reports as belonging to a separate browsing context.
-   *
-   * Deliberately lazy: starting it spawns a second driver process, and most
-   * scripts never need it.
-   */
-  async mcp(): Promise<SafariMcp> {
-    if (this.#mcpBinary === null) {
-      throw new McpError(
-        'The MCP channel is not enabled for this browser.\n' +
-          'Launch with mcp: true to enable it.',
-      );
-    }
-    if (this.#mcp !== null) return this.#mcp;
-    if (this.#mcpStarting !== null) return this.#mcpStarting;
-
-    this.#mcpStarting = SafariMcp.start({ binary: this.#mcpBinary })
-      .then((mcp) => {
-        this.#mcp = mcp;
-        return mcp;
-      })
-      .finally(() => {
-        this.#mcpStarting = null;
-      });
-    return this.#mcpStarting;
-  }
-
-  /** Whether the MCP channel was enabled at launch. */
-  get mcpEnabled(): boolean {
-    return this.#mcpBinary !== null;
-  }
 
   /** Capabilities safaridriver reported when the session was created. */
   get capabilities(): Record<string, unknown> {
@@ -228,8 +181,6 @@ export class Browser extends EventEmitter {
     }
     this.#pages.clear();
 
-    await this.#mcp?.close().catch(() => {});
-    this.#mcp = null;
     await this.#session.dispose();
     this.emit('disconnected');
   }

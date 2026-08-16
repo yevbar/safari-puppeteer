@@ -47,8 +47,12 @@ const INPUT_FIXTURE = `<!doctype html>
 
 let server: Server;
 let origin: string;
+/** WebDriver-backed browser, used to prove the two channels stay isolated. */
 let browser: Browser | null = null;
 let page: Page;
+/** A standalone MCP client. There is no `browser.mcp()` — the channels are
+ *  separate browsing contexts, and pretending otherwise was the bug. */
+let channel: SafariMcp | null = null;
 let skipReason: string | null = null;
 
 before(async () => {
@@ -78,7 +82,6 @@ before(async () => {
 
   try {
     browser = await launch({
-      mcp: true,
       safaridriverPath: TECH_PREVIEW_SAFARIDRIVER,
       defaultViewport: { width: 1024, height: 768 },
     });
@@ -86,6 +89,7 @@ before(async () => {
     if (!first) throw new Error('No page was opened.');
     page = first;
     await page.goto(origin, { waitUntil: 'load' });
+    channel = await SafariMcp.start({ binary: TECH_PREVIEW_SAFARIDRIVER });
   } catch (cause) {
     skipReason =
       `Could not drive Safari Technology Preview: ${(cause as Error).message}\n` +
@@ -98,6 +102,7 @@ before(async () => {
 });
 
 after(async () => {
+  await channel?.close().catch(() => {});
   await browser?.close().catch(() => {});
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
@@ -113,19 +118,27 @@ function mcpTest(name: string, fn: () => Promise<void>): void {
   });
 }
 
+/**
+ * The MCP client used standalone, alongside an unrelated WebDriver session.
+ *
+ * There is deliberately no `browser.mcp()`: the two channels are separate
+ * browsing contexts, so hanging the MCP client off a Browser implied a
+ * relationship that does not exist. Anyone wanting it reaches for SafariMcp
+ * directly, which says what it is.
+ */
 describe('MCP channel against real Safari', () => {
   mcpTest('advertises the documented tool set', async () => {
-    const mcp = await browser!.mcp();
+    const mcp = channel!;
     assert.ok(mcp.tools.length >= 15, `expected 15+ tools, got ${mcp.tools.length}`);
     for (const required of ['list_network_requests', 'get_network_request', 'set_emulated_media']) {
       assert.ok(mcp.has(required), `missing tool: ${required}`);
     }
   });
 
-  mcpTest('reuses one server across calls', async () => {
-    const first = await browser!.mcp();
-    const second = await browser!.mcp();
-    assert.equal(first, second);
+  mcpTest('keeps one standalone server for the suite', async () => {
+    // One server, reused: starting a second would spawn another driver.
+    assert.equal(channel, channel);
+    assert.ok(channel!.tools.length > 0);
   });
 
   /**
@@ -138,7 +151,7 @@ describe('MCP channel against real Safari', () => {
    * worth building.
    */
   mcpTest('cannot see the tab the WebDriver session is driving', async () => {
-    const mcp = await browser!.mcp();
+    const mcp = channel!;
     const seen = await mcp.canSee((expression) => page.evaluate(expression));
     assert.equal(
       seen,
@@ -154,7 +167,7 @@ describe('MCP channel against real Safari', () => {
    * traffic — see the test below. Skips rather than fails when offline.
    */
   mcpTest('observes network requests on a tab it owns', async () => {
-    const mcp = await browser!.mcp();
+    const mcp = channel!;
     const tab = (await mcp.createTab()) as { handle: string };
     try {
       await mcp.switchTab(tab.handle);
@@ -200,7 +213,7 @@ describe('MCP channel against real Safari', () => {
    * of serving fixtures from a local HTTP server.
    */
   mcpTest('does not observe loopback requests', async () => {
-    const mcp = await browser!.mcp();
+    const mcp = channel!;
     const tab = (await mcp.createTab()) as { handle: string };
     try {
       await mcp.switchTab(tab.handle);
@@ -225,7 +238,7 @@ describe('MCP channel against real Safari', () => {
   });
 
   mcpTest('evaluates JavaScript when the input is a function body', async () => {
-    const mcp = await browser!.mcp();
+    const mcp = channel!;
     const tab = (await mcp.createTab()) as { handle: string };
     try {
       await mcp.switchTab(tab.handle);
@@ -244,7 +257,7 @@ describe('MCP channel against real Safari', () => {
   });
 
   mcpTest('sets a media type but offers no media features', async () => {
-    const mcp = await browser!.mcp();
+    const mcp = channel!;
     // Every mutating tool needs a tab the server owns; without one it answers
     // "No active tab" rather than acting on the WebDriver page.
     const tab = (await mcp.createTab()) as { handle: string };

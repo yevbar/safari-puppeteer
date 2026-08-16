@@ -61,7 +61,7 @@ export const MCP_UNAVAILABLE_HINT =
   '  1. Settings > Advanced > check "Show features for web developers"\n' +
   '  2. Settings > Developer > check "Allow remote automation and external agents"\n\n' +
   'Then point safari-puppeteer at its driver:\n' +
-  `  launch({ mcp: true, safaridriverPath: '${TECH_PREVIEW_SAFARIDRIVER}' })`;
+  `  launch({ backend: 'mcp', safaridriverPath: '${TECH_PREVIEW_SAFARIDRIVER}' })`;
 
 export interface SafariMcpOptions {
   /** safaridriver binary to run with `--mcp`. */

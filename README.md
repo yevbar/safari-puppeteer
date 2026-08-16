@@ -361,19 +361,35 @@ Three behaviours of the MCP backend are worth knowing:
 - **Recording must start before the traffic.** The first `list_network_requests`
   call arms capture and returns nothing. The backend arms it before your first
   navigation so `page.networkRequests()` just works, but the same rule applies
-  if you drive `browser.mcp()` yourself — call `startNetworkCapture()` first.
+  if you drive a standalone `SafariMcp` yourself — call `startNetworkCapture()`
+  first.
 - **Loopback traffic is never recorded.** Navigating to `127.0.0.1` produces a
   working page and an empty request log, while the next navigation to a public
   origin in the same tab is captured normally. Local fixture servers are
   invisible to it.
 
-### The side channel
+### Using the MCP client directly
 
-`launch({ mcp: true })` is different: it keeps the WebDriver backend and starts
-an MCP server *alongside* it, reachable through `browser.mcp()`. That server is
-an independent browsing context — it cannot see your pages — so use it only for
-work you drive through its own tabs. If you want inspection of your own pages,
-use `backend: 'mcp'` instead.
+There is deliberately no way to attach an MCP server to a WebDriver-backed
+`Browser`. It would imply a relationship that does not exist: the server cannot
+see pages a WebDriver session owns, so anything it reported would describe a
+different browsing context. `backend: 'mcp'` is how you get inspection of your
+own pages.
+
+If you want the raw 17-tool client for its own sake, it is exported and says
+what it is:
+
+```ts
+import { SafariMcp, TECH_PREVIEW_SAFARIDRIVER } from 'safari-puppeteer';
+
+const mcp = await SafariMcp.start({ binary: TECH_PREVIEW_SAFARIDRIVER });
+const tab = await mcp.createTab();      // its own tab, not one of yours
+await mcp.switchTab(tab.handle);
+await mcp.startNetworkCapture(tab.handle);
+await mcp.navigate('https://example.com/', tab.handle);
+await mcp.listNetworkRequests({ tabHandle: tab.handle });
+await mcp.close();
+```
 
 ### Setup for the MCP backend
 

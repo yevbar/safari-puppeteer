@@ -2,8 +2,8 @@
  * Read-only network inspection, using the MCP backend.
  *
  * The MCP server can only observe tabs it created itself, so this drives the
- * whole page through it — `backend: 'mcp'` rather than the `mcp: true` side
- * channel. That is what makes the requests belong to the page we navigated.
+ * whole page through it. That is what makes the requests belong to the page we
+ * navigated, rather than to some other browsing context.
  *
  * Requires Safari Technology Preview 247+ with remote automation enabled in
  * Technology Preview itself (its settings are separate from Safari's):
