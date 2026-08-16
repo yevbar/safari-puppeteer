@@ -1,3 +1,8 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/yevbar/safari-puppeteer/master/logo.png"
+       alt="Puppeteer combined with Safari" width="560">
+</p>
+
 # safari-puppeteer
 
 Control a **local, real Safari** with the Puppeteer API, backed by

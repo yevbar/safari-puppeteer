@@ -4,5 +4,7 @@ dist/
 .DS_Store
 tmp/
 out/
+# Screenshot output from examples and tests; the logo is the one exception.
 *.png
+!logo.png
 *.pdf
