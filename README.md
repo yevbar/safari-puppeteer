@@ -3,10 +3,6 @@
 Control a **local, real Safari** with the Puppeteer API, backed by
 `safaridriver` (W3C WebDriver) and AppleScript.
 
-> The npm package is **`safari-puppeteer`**; the repository is
-> `yevbar/puppeteer-safari`. The `puppeteer-safari` name on npm is taken by an
-> unrelated placeholder package.
-
 ```bash
 npm install safari-puppeteer
 ```

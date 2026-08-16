@@ -22,13 +22,13 @@
   ],
   "author": "Yev Barkalov <yevbar1729@gmail.com>",
   "license": "MIT",
-  "homepage": "https://github.com/yevbar/puppeteer-safari#readme",
+  "homepage": "https://github.com/yevbar/safari-puppeteer#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yevbar/puppeteer-safari.git"
+    "url": "git+https://github.com/yevbar/safari-puppeteer.git"
   },
   "bugs": {
-    "url": "https://github.com/yevbar/puppeteer-safari/issues"
+    "url": "https://github.com/yevbar/safari-puppeteer/issues"
   },
   "engines": {
     "node": ">=18"
