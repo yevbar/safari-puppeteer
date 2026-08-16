@@ -68,17 +68,22 @@ export class SafariApp {
     return runJxaJson<SafariTabInfo[]>(`
       const safari = Application(${JSON.stringify(this.appName)});
       const out = [];
-      const windows = safari.windows();
+      let windows = [];
+      try { windows = safari.windows() || []; } catch (e) { windows = []; }
       for (let w = 0; w < windows.length; w++) {
         const win = windows[w];
-        let tabs;
+        let tabs = null;
         try { tabs = win.tabs(); } catch (e) { continue; }
+        // Safari's Settings and other chromeless windows answer null rather
+        // than throwing, so a try/catch alone is not enough here.
+        if (!tabs || typeof tabs.length !== 'number') continue;
         let currentIndex = -1;
         try { currentIndex = win.currentTab().index(); } catch (e) {}
+        const windowId = (() => { try { return win.id(); } catch (e) { return -1; } })();
         for (let t = 0; t < tabs.length; t++) {
           const tab = tabs[t];
           out.push({
-            windowId: win.id(),
+            windowId: windowId,
             windowName: (() => { try { return win.name(); } catch (e) { return ''; } })(),
             tabIndex: t + 1,
             name: (() => { try { return tab.name(); } catch (e) { return ''; } })(),
