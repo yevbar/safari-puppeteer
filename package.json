@@ -46,6 +46,7 @@
     "test:mcp": "node --test --experimental-strip-types --disable-warning=ExperimentalWarning test/mcp.test.ts",
     "test:integration": "node --test --experimental-strip-types --disable-warning=ExperimentalWarning test/integration.test.ts",
     "test:mcp:integration": "node --test --experimental-strip-types --disable-warning=ExperimentalWarning test/mcp-integration.test.ts",
+    "test:applescript": "node --test --experimental-strip-types --disable-warning=ExperimentalWarning test/applescript.test.ts",
     "test:all": "node --test --experimental-strip-types --disable-warning=ExperimentalWarning test/*.test.ts",
     "test:package": "node scripts/verify-package.mjs",
     "example": "node --experimental-strip-types --disable-warning=ExperimentalWarning examples/screenshot.ts",

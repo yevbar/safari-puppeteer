@@ -1,3 +1,4 @@
+import { UnsupportedOperationError } from '../common/errors.ts';
 import { escapeForAppleScript, runAppleScript, runJxaJson } from './osascript.ts';
 
 /**
@@ -113,9 +114,21 @@ export class SafariApp {
   /**
    * Evaluate JavaScript in a tab via Apple Events.
    *
-   * Requires Develop > "Allow JavaScript from Apple Events". This is a fallback
-   * path — prefer WebDriver's `executeScript`, which does not need that setting
-   * and returns structured values. This returns AppleScript's coerced string.
+   * Requires Develop > "Allow JavaScript from Apple Events". Prefer
+   * `page.evaluate()` wherever a WebDriver session will do — this path is for
+   * reaching the user's own tabs, which WebDriver cannot see at all.
+   *
+   * Results come back as AppleScript coerces them, which is lossy and worth
+   * knowing before you rely on it:
+   *
+   *   - numbers arrive as reals: `1 + 1` yields `"2.0"`, not `"2"`
+   *   - `null`, `undefined`, and a bare `throw` all yield `""`
+   *   - **page-side exceptions are not surfaced.** A script that throws is
+   *     indistinguishable from one returning null, so check the value rather
+   *     than relying on a rejection
+   *
+   * The script shares the page's global scope, so `const x = …` will throw on a
+   * second call against the same tab. Wrap declarations in an IIFE.
    */
   async doJavaScript(script: string, tabIndex = 1, windowIndex = 1): Promise<string> {
     const escaped = escapeForAppleScript(script);
@@ -148,11 +161,23 @@ export class SafariApp {
   }
 
   /**
-   * Clear browsing history. There is no WebDriver equivalent, and it is the
-   * only reliable way to reset state that `deleteAllCookies` does not cover.
+   * Not available.
+   *
+   * Safari's scripting dictionary has no history command, and the previous
+   * implementation here sent an empty keystroke — it reported success and did
+   * nothing, which is worse than refusing. Driving the History > Clear History
+   * menu through System Events is possible but depends on menu titles that
+   * change with the UI language, so it is not offered as if it were reliable.
    */
-  async clearHistory(): Promise<void> {
-    await runAppleScript(this.#tell('tell application "System Events" to keystroke ""'));
+  clearHistory(): Promise<never> {
+    return Promise.reject(
+      new UnsupportedOperationError(
+        'SafariApp.clearHistory()',
+        "Safari exposes no scripting command for browsing history — it is absent from the app's dictionary.",
+        'Clear it by hand via History > Clear History, or start from a clean profile. ' +
+          'For per-test isolation prefer page.deleteAllCookies() and clearing storage in-page with page.evaluate().',
+      ),
+    );
   }
 
   /** Send a keystroke to Safari via System Events (needs Accessibility permission). */
