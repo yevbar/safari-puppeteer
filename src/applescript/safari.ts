@@ -137,6 +137,116 @@ export class SafariApp {
     );
   }
 
+  // --- Tabs ------------------------------------------------------------------
+  //
+  // Tab and window indices are 1-based, matching AppleScript itself and
+  // {@link SafariApp.doJavaScript}. Index 1 of window 1 is the frontmost tab.
+
+  /** Number of tabs in a window. */
+  async tabCount(windowIndex = 1): Promise<number> {
+    const raw = await runAppleScript(this.#tell(`return count of tabs of window ${windowIndex}`));
+    return Number(raw);
+  }
+
+  /** Index of the window's active tab. */
+  async currentTabIndex(windowIndex = 1): Promise<number> {
+    const raw = await runAppleScript(
+      this.#tell(`return index of current tab of window ${windowIndex}`),
+    );
+    return Number(raw);
+  }
+
+  /**
+   * The tab's HTML.
+   *
+   * Unlike {@link SafariApp.doJavaScript} this does not execute anything in the
+   * page — Safari hands over the markup directly — which makes it the simplest
+   * way to capture a page from the user's own logged-in session.
+   */
+  async tabSource(tabIndex = 1, windowIndex = 1): Promise<string> {
+    return runAppleScript(this.#tell(`return source of ${target(tabIndex, windowIndex)}`));
+  }
+
+  /** The tab's rendered text, as Safari extracts it for Reader and search. */
+  async tabText(tabIndex = 1, windowIndex = 1): Promise<string> {
+    return runAppleScript(this.#tell(`return text of ${target(tabIndex, windowIndex)}`));
+  }
+
+  /** The tab's current URL. */
+  async tabUrl(tabIndex = 1, windowIndex = 1): Promise<string> {
+    return runAppleScript(this.#tell(`return URL of ${target(tabIndex, windowIndex)}`));
+  }
+
+  /** The tab's title. */
+  async tabName(tabIndex = 1, windowIndex = 1): Promise<string> {
+    return runAppleScript(this.#tell(`return name of ${target(tabIndex, windowIndex)}`));
+  }
+
+  /**
+   * Point an existing tab at a URL.
+   *
+   * Returns as soon as Safari accepts the command; the load continues in the
+   * background, so poll {@link SafariApp.tabUrl} if you need to wait for it.
+   */
+  async navigateTab(url: string, tabIndex = 1, windowIndex = 1): Promise<void> {
+    await runAppleScript(
+      this.#tell(
+        `set URL of ${target(tabIndex, windowIndex)} to "${escapeForAppleScript(url)}"`,
+      ),
+    );
+  }
+
+  /**
+   * Reload a tab.
+   *
+   * Implemented by re-assigning the tab's own URL. Safari exposes no reload
+   * command to AppleScript, and JXA's `reload()` fails with "Can't convert
+   * types", so the alternative would be `do JavaScript "location.reload()"` —
+   * which would drag in the Apple Events permission for something that does not
+   * otherwise need it.
+   */
+  async reloadTab(tabIndex = 1, windowIndex = 1): Promise<void> {
+    const where = target(tabIndex, windowIndex);
+    await runAppleScript(this.#tell(`set URL of ${where} to (URL of ${where})`));
+  }
+
+  /** Make a tab the active one in its window. */
+  async activateTab(tabIndex: number, windowIndex = 1): Promise<void> {
+    await runAppleScript(
+      this.#tell(
+        `set current tab of window ${windowIndex} to tab ${tabIndex} of window ${windowIndex}`,
+      ),
+    );
+  }
+
+  /** Close a tab. */
+  async closeTab(tabIndex = 1, windowIndex = 1): Promise<void> {
+    await runAppleScript(this.#tell(`close ${target(tabIndex, windowIndex)}`));
+  }
+
+  // --- Windows ---------------------------------------------------------------
+
+  /** Open a new window, optionally at a URL. */
+  async newWindow(url = ''): Promise<void> {
+    const properties = url === '' ? '' : ` with properties {URL:"${escapeForAppleScript(url)}"}`;
+    await runAppleScript(this.#tell(`make new document${properties}`));
+  }
+
+  /** Close a window and everything in it. */
+  async closeWindow(windowIndex = 1): Promise<void> {
+    await runAppleScript(this.#tell(`close window ${windowIndex}`));
+  }
+
+  /** Number of open windows. */
+  async windowCount(): Promise<number> {
+    return Number(await runAppleScript(this.#tell('return count of windows')));
+  }
+
+  /** The application's version string, e.g. `26.6`. */
+  async version(): Promise<string> {
+    return runAppleScript(`return version of application ${JSON.stringify(this.appName)}`);
+  }
+
   /** Move/resize the front window in screen coordinates. */
   async setBounds(bounds: { x: number; y: number; width: number; height: number }): Promise<void> {
     const { x, y, width, height } = bounds;
@@ -193,4 +303,9 @@ export class SafariApp {
         `end tell`,
     );
   }
+}
+
+/** `tab N of window M`, the target clause every tab command shares. */
+function target(tabIndex: number, windowIndex: number): string {
+  return `tab ${tabIndex} of window ${windowIndex}`;
 }

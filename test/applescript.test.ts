@@ -164,6 +164,141 @@ describe('SafariApp against a real Safari', () => {
   });
 });
 
+/**
+ * Tabs and windows.
+ *
+ * Every test here works on a scratch tab it opens and closes itself, and each
+ * asserts the tab count returns to its starting value — a test that leaks tabs
+ * into someone's real browsing session is not an acceptable trade.
+ */
+describe('SafariApp tabs and windows', () => {
+  /** Open a scratch tab, hand its index to the body, close it afterwards. */
+  async function withScratchTab(body: (tabIndex: number) => Promise<void>): Promise<void> {
+    const before = await safari.tabCount();
+    await safari.openUrlInNewTab('https://example.com/');
+
+    // The load is asynchronous; wait for the URL rather than guessing a delay.
+    const index = await safari.currentTabIndex();
+    for (let attempt = 0; attempt < 60; attempt++) {
+      if ((await safari.tabUrl(index)).startsWith('https://example.com')) break;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+
+    try {
+      await body(index);
+    } finally {
+      await safari.closeTab(index).catch(() => {});
+    }
+    assert.equal(await safari.tabCount(), before, 'scratch tab was not cleaned up');
+  }
+
+  appleTest('counts tabs and windows', async () => {
+    assert.ok((await safari.tabCount()) >= 1);
+    assert.ok((await safari.windowCount()) >= 1);
+  });
+
+  appleTest('reports the application version', async () => {
+    assert.match(await safari.version(), /^\d+/);
+  });
+
+  appleTest('opens and closes a tab, restoring the count', async () => {
+    const before = await safari.tabCount();
+    await withScratchTab(async (index) => {
+      assert.equal(await safari.tabCount(), before + 1);
+      assert.ok(index >= 1);
+    });
+  });
+
+  appleTest('reads a tab title and URL', async () => {
+    await withScratchTab(async (index) => {
+      assert.equal(await safari.tabName(index), 'Example Domain');
+      assert.match(await safari.tabUrl(index), /^https:\/\/example\.com/);
+    });
+  });
+
+  /**
+   * The capability that motivated filling this gap: page HTML from the user's
+   * own session, without executing anything in the page.
+   */
+  appleTest('reads a tab HTML source', async () => {
+    await withScratchTab(async (index) => {
+      const html = await safari.tabSource(index);
+      assert.match(html, /<html/i);
+      assert.match(html, /Example Domain/);
+    });
+  });
+
+  appleTest('reads a tab rendered text', async () => {
+    await withScratchTab(async (index) => {
+      const text = await safari.tabText(index);
+      assert.match(text, /Example Domain/);
+      // Text, not markup.
+      assert.equal(/<html/i.test(text), false);
+    });
+  });
+
+  appleTest('navigates an existing tab', async () => {
+    await withScratchTab(async (index) => {
+      await safari.navigateTab('https://example.com/?navigated=1', index);
+      for (let attempt = 0; attempt < 60; attempt++) {
+        if ((await safari.tabUrl(index)).includes('navigated=1')) break;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      assert.match(await safari.tabUrl(index), /navigated=1/);
+    });
+  });
+
+  appleTest('activates a tab', async () => {
+    await withScratchTab(async (index) => {
+      await safari.activateTab(1);
+      assert.equal(await safari.currentTabIndex(), 1);
+      await safari.activateTab(index);
+      assert.equal(await safari.currentTabIndex(), index);
+    });
+  });
+
+  appleTest('closing a tab of a window with several tabs leaves the rest', async () => {
+    const before = await safari.listTabs();
+    await withScratchTab(async () => {
+      assert.equal((await safari.listTabs()).length, before.length + 1);
+    });
+    assert.equal((await safari.listTabs()).length, before.length);
+  });
+});
+
+describe('SafariApp.reloadTab', () => {
+  jsTest('reloads without needing the JavaScript permission to do so', async () => {
+    // Verified by planting a global and watching it disappear. The reload
+    // itself uses no JavaScript — only this assertion does.
+    const before = await safari.tabCount();
+    await safari.openUrlInNewTab('https://example.com/');
+    const index = await safari.currentTabIndex();
+    for (let attempt = 0; attempt < 60; attempt++) {
+      if ((await safari.tabUrl(index)).startsWith('https://example.com')) break;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+
+    try {
+      await safari.doJavaScript('window.__marker = "present"; ""', index);
+      assert.equal(await safari.doJavaScript('window.__marker || ""', index), 'present');
+
+      await safari.reloadTab(index);
+      let cleared = false;
+      for (let attempt = 0; attempt < 60; attempt++) {
+        if ((await safari.doJavaScript('window.__marker || ""', index)) === '') {
+          cleared = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      assert.ok(cleared, 'the global survived, so the tab did not reload');
+    } finally {
+      await safari.closeTab(index).catch(() => {});
+    }
+    assert.equal(await safari.tabCount(), before);
+  });
+});
+
 describe('SafariApp.doJavaScript', () => {
   jsTest('evaluates an expression in a real tab', async () => {
     // AppleScript coerces numbers to reals on the way out.

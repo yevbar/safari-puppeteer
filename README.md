@@ -160,6 +160,39 @@ await page.safari.listTabs();      // every Safari tab, not just this session
 await page.safari.activate();
 ```
 
+### Driving your real Safari
+
+A WebDriver session is sandboxed to the window it created, so it cannot see the
+browser you actually use. The AppleScript bridge can — including tabs you are
+already logged into:
+
+```ts
+import { SafariApp } from 'safari-puppeteer';
+const safari = new SafariApp();          // or 'Safari Technology Preview'
+
+await safari.listTabs();                 // every window and tab
+await safari.tabSource(3);               // that tab's HTML, without running any script
+await safari.tabText(3);                 // its rendered text
+await safari.navigateTab(url, 3);        // point an existing tab somewhere
+await safari.activateTab(3);
+await safari.reloadTab(3);
+await safari.closeTab(3);
+await safari.newWindow(url);
+```
+
+Tab and window indices are 1-based, as in AppleScript; `tabSource` is the useful
+one, since it returns markup without executing anything in the page.
+
+This needs Automation permission (macOS prompts once).
+`doJavaScript()` additionally needs Develop → *Allow JavaScript from Apple
+Events*, and is lossy: numbers come back as reals (`1 + 1` → `"2.0"`), `null`,
+`undefined` and thrown errors all come back as `""`, and **page-side exceptions
+are not surfaced** — a throw is indistinguishable from null. Prefer
+`page.evaluate()` whenever a WebDriver session will do.
+
+`clearHistory()` is not available: Safari's dictionary has no history command,
+and it throws rather than pretending.
+
 ## Unsupported APIs
 
 These throw `UnsupportedOperationError` with the reason and the closest
