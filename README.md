@@ -183,9 +183,12 @@ alternative, rather than failing silently or pretending to work:
 
 Worth reading before you debug something surprising:
 
-- **`goto` returns `null`, not an `HTTPResponse`.** WebDriver exposes no
+- **`goto` returns `null`, not an `HTTPResponse`.** Neither backend exposes
   response metadata — no status, no headers. Returning a fake object would be
-  worse than returning nothing.
+  worse than returning nothing. It does **throw** when the navigation failed
+  outright (refused connection, unresolvable host), since both backends
+  otherwise report that as success and leave you on Safari's error page. An
+  HTTP error status is not a failure: a 404 resolves, as it does in Puppeteer.
 - **`waitUntil: 'networkidle0' | 'networkidle2'`** have no request-count signal
   behind them. They fall back to a quiet-period heuristic.
 - **Console and dialog events are polled** (250ms / 200ms). Messages logged

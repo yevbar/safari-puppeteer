@@ -15,6 +15,7 @@
 import type { Dialog, ScreenshotOptions, Viewport } from '../api/Page.ts';
 import type { ElementHandle, JSHandle } from '../api/JSHandle.ts';
 import { SafariPuppeteerError, UnsupportedOperationError } from '../common/errors.ts';
+import { withTimeout } from '../common/util.ts';
 import type { SafariMcp } from '../mcp/SafariMcp.ts';
 import type { Rect, WebDriverCookie } from '../webdriver/client.ts';
 import type {
@@ -77,9 +78,15 @@ export class McpBackend implements PageBackend {
 
   // --- Navigation ------------------------------------------------------------
 
-  async navigate(url: string): Promise<void> {
+  async navigate(url: string, timeout: number): Promise<void> {
     await this.#armCapture();
-    await this.#mcp.navigate(url, this.#handle);
+    // The tool has no timeout argument of its own, so the caller's budget is
+    // applied here rather than silently ignored.
+    await withTimeout(
+      this.#mcp.navigate(url, this.#handle),
+      timeout,
+      `Navigating to ${url}`,
+    );
   }
 
   async #armCapture(): Promise<void> {

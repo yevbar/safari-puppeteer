@@ -58,6 +58,11 @@ before(async () => {
       res.end('globalThis.__loaded = true;');
       return;
     }
+    if (req.url === '/missing') {
+      res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end('<!doctype html><title>404</title><p id="real">not found</p>');
+      return;
+    }
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(req.url === '/keys' ? INPUT_FIXTURE : FIXTURE);
   });
@@ -444,6 +449,24 @@ describe('MCP backend against real Safari', () => {
     });
     await mcpPage.focus('#probe');
     assert.equal(await mcpPage.evaluate(() => document.activeElement?.id), 'probe');
+  });
+
+  backendTest('throws when a navigation fails', async () => {
+    // The MCP backend lands on Safari's error page rather than about:blank, so
+    // this exercises the other detection branch from the WebDriver suite.
+    await assert.rejects(
+      () => mcpPage.goto('http://no-such-host-xyz-12345.invalid/', { timeout: 20_000 }),
+      /Navigation to http:\/\/no-such-host-xyz-12345\.invalid\/ failed/,
+    );
+    await assert.rejects(
+      () => mcpPage.goto('http://127.0.0.1:1/', { timeout: 20_000 }),
+      /failed/,
+    );
+  });
+
+  backendTest('does not treat an HTTP error status as a failure', async () => {
+    await mcpPage.goto(`${origin}/missing`);
+    assert.equal(await mcpPage.$eval('#real', (el: Element) => el.textContent), 'not found');
   });
 
   backendTest('refuses what it cannot do, naming the backend', async () => {

@@ -58,7 +58,22 @@ let inputSkipReason: string | null = null;
 
 before(async () => {
   server = createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    const html = { 'Content-Type': 'text/html; charset=utf-8' };
+
+    if (req.url === '/missing') {
+      res.writeHead(404, html);
+      res.end('<!doctype html><title>404</title><p id="real">not found</p>');
+      return;
+    }
+    if (req.url === '/lookalike') {
+      // Shares Safari's error-page title on purpose: detection must not key
+      // off the title, or every site using this phrase would look broken.
+      res.writeHead(200, html);
+      res.end('<!doctype html><title>Failed to open page</title><p id="real">a real page</p>');
+      return;
+    }
+
+    res.writeHead(200, html);
     res.end(req.url === '/second' ? SECOND : FIXTURE);
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -483,5 +498,52 @@ describe('file upload', () => {
     await input.uploadFile(missing).catch(() => {});
     const count = await page.$eval('#file', (element: HTMLInputElement) => element.files?.length ?? 0);
     assert.equal(count, 0);
+  });
+});
+
+
+/**
+ * Navigation failures.
+ *
+ * Both backends report a refused connection or a DNS miss as success and leave
+ * you on Safari's error page, so without this a script carries on against the
+ * wrong document.
+ */
+describe('navigation failures', () => {
+  safariTest('throws when the host is unreachable', async () => {
+    await assert.rejects(
+      () => page.goto('http://no-such-host-xyz-12345.invalid/', { timeout: 20_000 }),
+      (error: Error) => {
+        assert.match(error.message, /Navigation to http:\/\/no-such-host-xyz-12345\.invalid\/ failed/);
+        return true;
+      },
+    );
+  });
+
+  safariTest('throws when the connection is refused', async () => {
+    await assert.rejects(
+      () => page.goto('http://127.0.0.1:1/', { timeout: 20_000 }),
+      /Navigation to http:\/\/127\.0\.0\.1:1\/ failed/,
+    );
+  });
+
+  safariTest('does not treat an HTTP error status as a failure', async () => {
+    // A 404 is a real response; Puppeteer resolves for it and so must we.
+    await page.goto(`${origin}/missing`, { waitUntil: 'load' });
+    assert.equal(await page.$eval('#real', (el: Element) => el.textContent), 'not found');
+  });
+
+  safariTest('does not misfire on a page titled like the error page', async () => {
+    // Detection keys off the safari-resource: origin, not the title.
+    await page.goto(`${origin}/lookalike`, { waitUntil: 'load' });
+    assert.equal(await page.title(), 'Failed to open page');
+    assert.equal(await page.$eval('#real', (el: Element) => el.textContent), 'a real page');
+  });
+
+  safariTest('still navigates to about:blank on request', async () => {
+    await page.goto('about:blank');
+    assert.equal(await page.url(), 'about:blank');
+    // Restore, so later tests are unaffected by ordering.
+    await page.goto(origin, { waitUntil: 'load' });
   });
 });

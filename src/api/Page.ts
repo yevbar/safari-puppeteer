@@ -206,6 +206,7 @@ export class Page extends EventEmitter {
     await this.bringToDriver();
     await this.#backend.navigate(url, options.timeout ?? this.#navTimeout);
     await this.#afterNavigation(options);
+    await this.#assertNavigated(url);
     // Puppeteer returns an HTTPResponse here; neither backend exposes response
     // metadata, so null is the honest answer.
     return null;
@@ -215,6 +216,7 @@ export class Page extends EventEmitter {
     await this.bringToDriver();
     await this.#backend.reload();
     await this.#afterNavigation(options);
+    await this.#assertNavigated();
     return null;
   }
 
@@ -222,6 +224,7 @@ export class Page extends EventEmitter {
     await this.bringToDriver();
     await this.#backend.back();
     await this.#afterNavigation(options);
+    await this.#assertNavigated();
     return null;
   }
 
@@ -229,7 +232,60 @@ export class Page extends EventEmitter {
     await this.bringToDriver();
     await this.#backend.forward();
     await this.#afterNavigation(options);
+    await this.#assertNavigated();
     return null;
+  }
+
+  /**
+   * Fail loudly when a navigation did not actually reach the page.
+   *
+   * Neither backend reports transport failures: a refused connection or a DNS
+   * miss returns success and leaves you on Safari's error page, so a script
+   * carries on against the wrong document. Puppeteer throws here, and so do we.
+   *
+   * Detection is by document origin, not by title — Safari's error page is
+   * served from `safari-resource:`, which no real page can occupy. Matching on
+   * the title "Failed to open page" would misfire on any site that happens to
+   * use it, which is exactly the false positive worth avoiding. A refused
+   * connection is the other shape: the WebDriver backend stays on `about:blank`
+   * rather than rendering an error page.
+   *
+   * An HTTP error status is deliberately *not* a failure. A 404 is a real
+   * response and Puppeteer resolves for it too.
+   */
+  async #assertNavigated(requested?: string): Promise<void> {
+    const state = await this.#backend
+      .evaluate<{ href: string; protocol: string; text: string }>(
+        () => ({
+          href: location.href,
+          protocol: location.protocol,
+          text: (document.body?.innerText ?? '').replace(/\s+/g, ' ').trim().slice(0, 300),
+        }),
+        [],
+      )
+      .catch(() => null);
+
+    if (state === null) return; // Cannot tell; better to proceed than to guess.
+
+    const target = requested === undefined ? 'the page' : requested;
+
+    if (state.protocol === 'safari-resource:') {
+      throw new SafariPuppeteerError(
+        `Navigation to ${target} failed — Safari displayed its error page.` +
+          (state.text ? `\nSafari said: ${state.text}` : ''),
+      );
+    }
+
+    if (
+      requested !== undefined &&
+      state.href === 'about:blank' &&
+      !requested.startsWith('about:')
+    ) {
+      throw new SafariPuppeteerError(
+        `Navigation to ${requested} failed — Safari stayed on about:blank, which usually means ` +
+          'the connection was refused or the host is unreachable.',
+      );
+    }
   }
 
   /** Re-establish per-document state and honour `waitUntil`. */
