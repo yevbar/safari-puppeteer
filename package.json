@@ -5,6 +5,9 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "safari-puppeteer": "./dist/cli/index.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -41,7 +44,7 @@
     "build": "npm run clean && tsc -p tsconfig.json && node scripts/fix-dts-extensions.mjs",
     "watch": "tsc -p tsconfig.json --watch",
     "clean": "rm -rf dist",
-    "doctor": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/doctor.ts",
+    "doctor": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/cli/index.ts doctor",
     "test": "node --test --experimental-strip-types --disable-warning=ExperimentalWarning test/unit.test.ts test/mcp.test.ts",
     "test:mcp": "node --test --experimental-strip-types --disable-warning=ExperimentalWarning test/mcp.test.ts",
     "test:integration": "node --test --experimental-strip-types --disable-warning=ExperimentalWarning test/integration.test.ts",

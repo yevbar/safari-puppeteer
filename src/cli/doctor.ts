@@ -1,7 +1,10 @@
 /**
  * Environment check for safari-puppeteer.
  *
- * Run: npm run doctor
+ * Shipped in the package and reachable as `npx safari-puppeteer doctor`. The
+ * setup this library needs is all OS-level toggles that cannot be scripted, so
+ * the tool that diagnoses them has to be available to whoever installed it —
+ * not just inside this repository.
  *
  * Every failure prints the exact command or setting that fixes it, so this can
  * be run by an agent as a first step and acted on without asking a human.
@@ -81,10 +84,12 @@ async function checkSafariDriver(): Promise<void> {
  * so that is what we do — briefly.
  */
 async function checkRemoteAutomation(): Promise<void> {
-  const { SafariDriverProcess } = await import('../src/webdriver/safaridriver.ts');
-  const { WebDriverClient } = await import('../src/webdriver/client.ts');
+  const { SafariDriverProcess } = await import('../webdriver/safaridriver.ts');
+  const { WebDriverClient } = await import('../webdriver/client.ts');
 
-  let driver: InstanceType<typeof SafariDriverProcess> | null = null;
+  // Derived from start()'s return type rather than InstanceType, because the
+  // class has a private constructor and cannot be instantiated structurally.
+  let driver: Awaited<ReturnType<typeof SafariDriverProcess.start>> | null = null;
   try {
     driver = await SafariDriverProcess.start({ startTimeout: 15_000 });
   } catch (cause) {
@@ -120,7 +125,7 @@ async function checkRemoteAutomation(): Promise<void> {
  * is worth reporting even though everything else will look healthy.
  */
 async function checkScreenLock(): Promise<void> {
-  const { isScreenLocked, SCREEN_LOCKED_HINT } = await import('../src/common/macos.ts');
+  const { isScreenLocked, SCREEN_LOCKED_HINT } = await import('../common/macos.ts');
   const locked = await isScreenLocked();
   record(
     'Screen lock',
@@ -135,9 +140,9 @@ async function checkScreenLock(): Promise<void> {
  * rather than a warning.
  */
 async function checkMcp(): Promise<void> {
-  const { isMcpSupported, MCP_UNAVAILABLE_HINT } = await import('../src/mcp/SafariMcp.ts');
+  const { isMcpSupported, MCP_UNAVAILABLE_HINT } = await import('../mcp/SafariMcp.ts');
   const { DEFAULT_SAFARIDRIVER, TECH_PREVIEW_SAFARIDRIVER } = await import(
-    '../src/webdriver/safaridriver.ts'
+    '../webdriver/safaridriver.ts'
   );
 
   const supported: string[] = [];
@@ -221,7 +226,14 @@ async function checkAppleEventsJavaScript(): Promise<void> {
 
 const ICONS: Record<Status, string> = { pass: '✓', fail: '✗', warn: '!' };
 
-async function main(): Promise<void> {
+/**
+ * Run every check and print a report.
+ *
+ * @returns the process exit code: 0 when Safari can be driven, 1 otherwise.
+ */
+export async function runDoctor(): Promise<number> {
+  // Reset, so calling this twice in one process does not double-report.
+  results.length = 0;
   console.log('safari-puppeteer doctor\n');
 
   await checkPlatform();
@@ -253,10 +265,8 @@ async function main(): Promise<void> {
 
   if (failures.length > 0) {
     console.log('\nsafari-puppeteer cannot drive Safari until the failures above are fixed.');
-    process.exitCode = 1;
-    return;
+    return 1;
   }
   console.log('\nEnvironment is ready.');
+  return 0;
 }
-
-await main();

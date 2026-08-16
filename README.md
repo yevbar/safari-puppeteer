@@ -62,13 +62,18 @@ exception: it requires Safari Technology Preview 247+**, because it depends on
 
 ## Setup
 
-Run the doctor first. It checks every prerequisite and prints the exact fix for
-anything missing:
+Run the doctor first. It ships with the package, checks every prerequisite, and
+prints the exact fix for anything missing:
 
 ```bash
-npm install
-npm run doctor
+npm install safari-puppeteer
+npx safari-puppeteer doctor
 ```
+
+It reports macOS and Safari versions, whether the driver is enabled, whether
+Remote Automation works (by creating a real session), whether the screen is
+locked, whether AppleScript is permitted, and whether any driver supports
+`--mcp`. Exit code 0 means Safari can be driven.
 
 Two one-time settings are required, and neither can be scripted (both are
 OS-level trust decisions):
@@ -425,9 +430,10 @@ BiDi without changing the public API.
 ## Development
 
 ```bash
-npm run doctor            # check the environment
+npm run doctor            # check the environment (same as npx safari-puppeteer doctor)
 npm test                  # unit + MCP tests, no Safari needed
 npm run test:mcp          # MCP protocol tests against a fake stdio server
+npm run test:applescript  # AppleScript bridge against your real Safari
 npm run test:integration  # drives a real Safari window; skips if unavailable
 npm run test:package      # pack, install, and import the built tarball
 npm run build             # emit dist/

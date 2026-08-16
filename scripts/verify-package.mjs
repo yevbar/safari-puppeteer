@@ -74,6 +74,20 @@ try {
     assert.ok(shipped.includes('dist/index.d.ts'), 'dist/index.d.ts missing from tarball');
   });
 
+  check('ships the doctor CLI', () => {
+    // The setup this library needs is all OS-level toggles, so the tool that
+    // diagnoses them has to reach whoever installed the package.
+    assert.ok(shipped.includes('dist/cli/index.js'), 'dist/cli/index.js missing from tarball');
+    assert.ok(shipped.includes('dist/cli/doctor.js'), 'dist/cli/doctor.js missing from tarball');
+
+    const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+    assert.equal(manifest.bin?.['safari-puppeteer'], './dist/cli/index.js');
+
+    // Without the shebang npm's shim cannot exec it.
+    const cli = readFileSync(join(root, 'dist', 'cli', 'index.js'), 'utf8');
+    assert.ok(cli.startsWith('#!/usr/bin/env node'), 'CLI is missing its shebang');
+  });
+
   check('ships README and LICENSE', () => {
     assert.ok(shipped.includes('README.md'), 'README.md missing');
     assert.ok(shipped.includes('LICENSE'), 'LICENSE missing');
@@ -216,6 +230,25 @@ try {
       cwd: consumer,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+  });
+
+  check('the installed CLI is executable by name', () => {
+    // npm links bin entries into node_modules/.bin and sets the exec bit; this
+    // is the only way to prove `npx safari-puppeteer doctor` will work.
+    const version = execFileSync(join(consumer, 'node_modules', '.bin', 'safari-puppeteer'), ['--version'], {
+      cwd: consumer,
+      encoding: 'utf8',
+      env: npmEnv(),
+    });
+    assert.match(version.trim(), /^\d+\.\d+\.\d+/);
+
+    const help = execFileSync(join(consumer, 'node_modules', '.bin', 'safari-puppeteer'), ['--help'], {
+      cwd: consumer,
+      encoding: 'utf8',
+      env: npmEnv(),
+    });
+    assert.match(help, /doctor/);
+    assert.match(help, /safaridriver --enable/);
   });
 
   check('unsupported APIs still reject with guidance', async () => {
