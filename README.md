@@ -1,6 +1,6 @@
 <p align="center">
   <img src="https://raw.githubusercontent.com/yevbar/safari-puppeteer/master/logo.png"
-       alt="Puppeteer combined with Safari" width="560">
+       alt="Safari combined with Puppeteer" width="560">
 </p>
 
 # safari-puppeteer
